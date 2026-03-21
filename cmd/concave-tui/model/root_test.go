@@ -189,7 +189,7 @@ func TestRootSidebarToggleAndPresetCycle(t *testing.T) {
 		t.Fatalf("sidebar = %v, want expanded", m.sidebar)
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	updated, _ := m.Update(keyRunes("b"))
 	root := updated.(*RootModel)
 	if root.sidebar != SidebarCollapsed {
 		t.Fatalf("sidebar = %v, want collapsed", root.sidebar)
@@ -252,6 +252,30 @@ func TestRootSettingsSaveAndDiscard(t *testing.T) {
 	root = updated.(*RootModel)
 	if root.cfg.ActivePreset != "mlops" {
 		t.Fatalf("discard should keep saved config, got %q", root.cfg.ActivePreset)
+	}
+}
+
+func TestRootRendersCenteredModalAndModeIndicator(t *testing.T) {
+	restoreModelDeps(t)
+
+	m := NewRootModel("dev", testConfig())
+	m.width = 140
+	m.height = 40
+	m.applyLayout()
+	m.showSettings = true
+
+	view := m.View()
+	if !strings.Contains(view, "Settings") {
+		t.Fatalf("expected settings modal in view, got %q", view)
+	}
+	if !strings.Contains(view, "NORMAL") {
+		t.Fatalf("expected normal mode footer, got %q", view)
+	}
+
+	m.settings.focusedField = settingsFieldWidth
+	m.settings.insertMode = true
+	if !strings.Contains(m.footerView(), "INSERT") {
+		t.Fatalf("expected insert mode indicator, got %q", m.footerView())
 	}
 }
 

@@ -1,7 +1,6 @@
 package model
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -12,46 +11,129 @@ import (
 	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
 )
 
+const (
+	settingsFieldGraphStyle = iota
+	settingsFieldWidth
+	settingsFieldHeight
+	settingsFieldRefresh
+	settingsFieldSidebar
+	settingsFieldPreset
+	settingsFieldCount
+)
+
 type settingsSavedMsg struct {
 	Config tuiconfig.Config
 }
 
 type settingsDiscardedMsg struct{}
 
+type PresetChangedMsg struct {
+	PresetName string
+}
+
+type RadioField struct {
+	Label    string
+	Options  []string
+	Selected int
+}
+
+func (f *RadioField) SetValue(value string) {
+	for idx, option := range f.Options {
+		if strings.EqualFold(option, value) {
+			f.Selected = idx
+			return
+		}
+	}
+	f.Selected = 0
+}
+
+func (f RadioField) Value() string {
+	if len(f.Options) == 0 {
+		return ""
+	}
+	if f.Selected < 0 || f.Selected >= len(f.Options) {
+		return f.Options[0]
+	}
+	return f.Options[f.Selected]
+}
+
+func (f *RadioField) Move(delta int) {
+	if len(f.Options) == 0 {
+		return
+	}
+	next := (f.Selected + delta) % len(f.Options)
+	if next < 0 {
+		next += len(f.Options)
+	}
+	f.Selected = next
+}
+
+func (f RadioField) View(focused bool) string {
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render(f.Label)
+	if focused {
+		label = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(f.Label)
+	}
+
+	parts := make([]string, 0, len(f.Options))
+	for idx, opt := range f.Options {
+		if idx == f.Selected {
+			parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("● "+opt))
+			continue
+		}
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render("○ "+opt))
+	}
+	return label + "   " + strings.Join(parts, "  ")
+}
+
 type SettingsModel struct {
-	width      int
-	height     int
-	cursor     int
-	editing    bool
-	input      textinput.Model
-	current    tuiconfig.Config
-	original   tuiconfig.Config
-	lastSaved  string
-	fieldOrder []string
+	width        int
+	height       int
+	current      tuiconfig.Config
+	original     tuiconfig.Config
+	graphStyle   RadioField
+	sidebarRadio RadioField
+	presetRadio  RadioField
+	widthInput   textinput.Model
+	heightInput  textinput.Model
+	refreshInput textinput.Model
+	focusedField int
+	insertMode   bool
 }
 
 func NewSettingsModel(cfg tuiconfig.Config) SettingsModel {
+	m := SettingsModel{
+		graphStyle: RadioField{
+			Label:   "Graph style",
+			Options: []string{"line", "bar", "auto"},
+		},
+		sidebarRadio: RadioField{
+			Label:   "Sidebar default",
+			Options: []string{"expanded", "collapsed"},
+		},
+		widthInput:   newNumericInput(),
+		heightInput:  newNumericInput(),
+		refreshInput: newNumericInput(),
+	}
+	m.SetConfig(cfg)
+	return m
+}
+
+func newNumericInput() textinput.Model {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 6
 	input.Width = 8
 	input.Validate = func(value string) error {
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			return nil
 		}
-		for _, r := range value {
-			if r < '0' || r > '9' {
-				return fmt.Errorf("numeric only")
-			}
-		}
-		return nil
+		_, err := strconv.Atoi(value)
+		return err
 	}
-	return SettingsModel{
-		current:    cfg,
-		original:   cfg,
-		input:      input,
-		fieldOrder: []string{"graph_style", "width", "height", "refresh", "sidebar", "preset"},
-	}
+	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold))
+	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold))
+	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
+	return input
 }
 
 func (m *SettingsModel) SetSize(width, height int) {
@@ -62,201 +144,237 @@ func (m *SettingsModel) SetSize(width, height int) {
 func (m *SettingsModel) SetConfig(cfg tuiconfig.Config) {
 	m.current = cfg
 	m.original = cfg
-	m.editing = false
-	m.input.Blur()
-	m.input.SetValue("")
+	m.graphStyle.SetValue(cfg.Display.GraphStyle)
+	m.sidebarRadio.SetValue(cfg.Display.SidebarDefault)
+	m.presetRadio = RadioField{
+		Label:   "Dashboard preset",
+		Options: cfg.PresetNames(),
+	}
+	if len(m.presetRadio.Options) == 0 {
+		m.presetRadio.Options = []string{"default"}
+	}
+	m.presetRadio.SetValue(cfg.ActivePreset)
+	m.widthInput.SetValue(strconv.Itoa(cfg.Display.GraphAutoWidthThreshold))
+	m.heightInput.SetValue(strconv.Itoa(cfg.Display.GraphAutoHeightThreshold))
+	m.refreshInput.SetValue(strconv.Itoa(cfg.Display.RefreshIntervalMs))
+	m.focusedField = settingsFieldGraphStyle
+	m.insertMode = false
+	m.blurInputs()
 }
 
 func (m SettingsModel) Current() tuiconfig.Config {
 	return m.current
 }
 
+func (m SettingsModel) IsInsertMode() bool {
+	return m.insertMode
+}
+
 func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		if m.editing {
-			return m.updateEditing(keyMsg)
+	switch typed := msg.(type) {
+	case tea.KeyMsg:
+		if m.insertMode {
+			switch typed.String() {
+			case "esc":
+				m.insertMode = false
+				m.blurInputs()
+				return m, nil
+			case "tab", "j", "down":
+				return m.moveFocus(1)
+			case "shift+tab", "k", "up":
+				return m.moveFocus(-1)
+			}
+			if typed.Type == tea.KeyRunes {
+				for _, r := range typed.Runes {
+					if r < '0' || r > '9' {
+						return m, nil
+					}
+				}
+			}
+			return m.updateFocusedInput(msg)
 		}
-		return m.updateNavigation(keyMsg)
+
+		switch typed.String() {
+		case "esc":
+			return m, func() tea.Msg { return settingsDiscardedMsg{} }
+		case "s":
+			m.syncCurrent()
+			saved := m.current
+			return m, tea.Batch(
+				func() tea.Msg { return settingsSavedMsg{Config: saved} },
+				func() tea.Msg { return PresetChangedMsg{PresetName: saved.ActivePreset} },
+			)
+		case "tab", "j", "down":
+			return m.moveFocus(1)
+		case "shift+tab", "k", "up":
+			return m.moveFocus(-1)
+		case "h", "left":
+			m.shiftFocusedSelection(-1)
+			return m, nil
+		case "l", "right":
+			m.shiftFocusedSelection(1)
+			return m, nil
+		case "enter":
+			if m.isNumericField(m.focusedField) {
+				m.insertMode = true
+				return m, m.applyFocus()
+			}
+		}
 	}
 	return m, nil
 }
 
-func (m SettingsModel) updateEditing(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.editing = false
-		m.input.Blur()
-		m.input.SetValue("")
-		return m, nil
-	case "enter":
-		if m.applyInput() {
-			m.editing = false
-			m.input.Blur()
-			m.input.SetValue("")
-		}
-		return m, nil
+func (m *SettingsModel) syncCurrent() {
+	m.current.Display.GraphStyle = m.graphStyle.Value()
+	m.current.Display.SidebarDefault = m.sidebarRadio.Value()
+	m.current.ActivePreset = m.presetRadio.Value()
+	m.current.Display.GraphAutoWidthThreshold = m.numericValue(m.widthInput.Value(), m.current.Display.GraphAutoWidthThreshold)
+	m.current.Display.GraphAutoHeightThreshold = m.numericValue(m.heightInput.Value(), m.current.Display.GraphAutoHeightThreshold)
+	m.current.Display.RefreshIntervalMs = m.numericValue(m.refreshInput.Value(), m.current.Display.RefreshIntervalMs)
+}
+
+func (m SettingsModel) numericValue(value string, fallback int) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return fallback
 	}
+	return parsed
+}
+
+func (m SettingsModel) moveFocus(delta int) (SettingsModel, tea.Cmd) {
+	m.focusedField = (m.focusedField + delta + settingsFieldCount) % settingsFieldCount
+	m.insertMode = m.isNumericField(m.focusedField)
+	return m, m.applyFocus()
+}
+
+func (m *SettingsModel) blurInputs() {
+	m.widthInput.Blur()
+	m.heightInput.Blur()
+	m.refreshInput.Blur()
+}
+
+func (m *SettingsModel) applyFocus() tea.Cmd {
+	m.blurInputs()
+	switch m.focusedField {
+	case settingsFieldWidth:
+		return m.widthInput.Focus()
+	case settingsFieldHeight:
+		return m.heightInput.Focus()
+	case settingsFieldRefresh:
+		return m.refreshInput.Focus()
+	default:
+		return nil
+	}
+}
+
+func (m SettingsModel) isNumericField(index int) bool {
+	switch index {
+	case settingsFieldWidth, settingsFieldHeight, settingsFieldRefresh:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m SettingsModel) updateFocusedInput(msg tea.Msg) (SettingsModel, tea.Cmd) {
 	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	switch m.focusedField {
+	case settingsFieldWidth:
+		m.widthInput, cmd = m.widthInput.Update(msg)
+	case settingsFieldHeight:
+		m.heightInput, cmd = m.heightInput.Update(msg)
+	case settingsFieldRefresh:
+		m.refreshInput, cmd = m.refreshInput.Update(msg)
+	}
+	m.syncCurrent()
 	return m, cmd
 }
 
-func (m SettingsModel) updateNavigation(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.current = m.original
-		return m, func() tea.Msg { return settingsDiscardedMsg{} }
-	case "s":
-		m.original = m.current
-		return m, func() tea.Msg { return settingsSavedMsg{Config: m.current} }
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-	case "down", "j":
-		if m.cursor < len(m.fieldOrder)-1 {
-			m.cursor++
-		}
-	case "g":
-		m.cursor = 0
-	case "G":
-		m.cursor = len(m.fieldOrder) - 1
-	case "left", "h":
-		m.adjustCurrent(-1)
-	case "right":
-		m.adjustCurrent(1)
-	case "l":
-		if m.fieldOrder[m.cursor] == "preset" {
-			m.adjustCurrent(1)
-			break
-		}
-		if m.fieldOrder[m.cursor] == "graph_style" || m.fieldOrder[m.cursor] == "sidebar" {
-			m.adjustCurrent(1)
-		}
-	case "enter":
-		if m.fieldOrder[m.cursor] == "width" || m.fieldOrder[m.cursor] == "height" || m.fieldOrder[m.cursor] == "refresh" {
-			m.editing = true
-			m.input.Focus()
-			m.input.SetValue(m.numericValue())
-		}
-	}
-	return m, nil
-}
-
-func (m *SettingsModel) adjustCurrent(step int) {
-	switch m.fieldOrder[m.cursor] {
-	case "graph_style":
-		options := []string{"line", "bar", "auto"}
-		m.current.Display.GraphStyle = cycleString(options, m.current.Display.GraphStyle, step)
-	case "sidebar":
-		options := []string{"expanded", "collapsed"}
-		m.current.Display.SidebarDefault = cycleString(options, m.current.Display.SidebarDefault, step)
-	case "preset":
-		names := m.current.PresetNames()
-		if len(names) == 0 {
-			return
-		}
-		m.current.ActivePreset = cycleString(names, m.current.ActivePreset, step)
-	}
-}
-
-func (m SettingsModel) numericValue() string {
-	switch m.fieldOrder[m.cursor] {
-	case "width":
-		return strconv.Itoa(m.current.Display.GraphAutoWidthThreshold)
-	case "height":
-		return strconv.Itoa(m.current.Display.GraphAutoHeightThreshold)
-	case "refresh":
-		return strconv.Itoa(m.current.Display.RefreshIntervalMs)
+func (m *SettingsModel) shiftFocusedSelection(delta int) {
+	switch m.focusedField {
+	case settingsFieldGraphStyle:
+		m.graphStyle.Move(delta)
+	case settingsFieldSidebar:
+		m.sidebarRadio.Move(delta)
+	case settingsFieldPreset:
+		m.presetRadio.Move(delta)
 	default:
-		return ""
+		return
 	}
-}
-
-func (m *SettingsModel) applyInput() bool {
-	value := strings.TrimSpace(m.input.Value())
-	if value == "" {
-		return false
-	}
-	num, err := strconv.Atoi(value)
-	if err != nil {
-		return false
-	}
-	switch m.fieldOrder[m.cursor] {
-	case "width":
-		m.current.Display.GraphAutoWidthThreshold = num
-	case "height":
-		m.current.Display.GraphAutoHeightThreshold = num
-	case "refresh":
-		m.current.Display.RefreshIntervalMs = num
-	default:
-		return false
-	}
-	return true
+	m.syncCurrent()
 }
 
 func (m SettingsModel) View() string {
-	style := lipgloss.NewStyle().
-		Width(max(56, m.width)).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(ColorGold)).
-		Padding(0, 1)
+	width := m.width
+	if width <= 0 {
+		width = 72
+	}
 
 	lines := []string{
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Settings"),
 		"",
-		"Display",
-		m.renderRow(0, "Graph style", fmt.Sprintf("○ line  ○ bar  ○ auto   [%s]", m.current.Display.GraphStyle)),
-		m.renderRow(1, "Width threshold", m.renderNumericOrValue(strconv.Itoa(m.current.Display.GraphAutoWidthThreshold)+" cols")),
-		m.renderRow(2, "Height threshold", m.renderNumericOrValue(strconv.Itoa(m.current.Display.GraphAutoHeightThreshold)+" rows")),
-		m.renderRow(3, "Refresh interval", m.renderNumericOrValue(strconv.Itoa(m.current.Display.RefreshIntervalMs)+" ms")),
-		m.renderRow(4, "Sidebar default", fmt.Sprintf("○ expanded  ○ collapsed   [%s]", m.current.Display.SidebarDefault)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Display"),
+		m.graphStyle.View(m.focusedField == settingsFieldGraphStyle),
+		m.renderNumericRow("Width threshold", m.widthInput, m.focusedField == settingsFieldWidth),
+		m.renderNumericRow("Height threshold", m.heightInput, m.focusedField == settingsFieldHeight),
+		m.renderNumericRow("Refresh interval", m.refreshInput, m.focusedField == settingsFieldRefresh),
+		m.sidebarRadio.View(m.focusedField == settingsFieldSidebar),
 		"",
-		"Dashboard Preset",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Dashboard Preset"),
 	}
+
+	for idx, name := range m.presetRadio.Options {
+		marker := mutedText("○")
+		if idx == m.presetRadio.Selected {
+			marker = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("●")
+		}
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
+		if m.focusedField == settingsFieldPreset && idx == m.presetRadio.Selected {
+			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
+		}
+		lines = append(lines, "  "+marker+" "+labelStyle.Render(name)+"      "+mutedText(m.presetDescription(name)))
+	}
+
+	lines = append(lines,
+		"",
+		mutedText("[s] save and close        [esc] discard changes"),
+	)
+
+	body := strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		Width(min(width, 78)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ColorDeep)).
+		Padding(1, 2).
+		Render(body)
+}
+
+func (m SettingsModel) renderNumericRow(label string, input textinput.Model, focused bool) string {
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
+	if focused {
+		labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
+	}
+
+	value := input.View()
+	if !focused {
+		value = mutedText(input.Value())
+	}
+	inputStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(ColorMuted)).
+		Padding(0, 1)
+	if focused {
+		inputStyle = inputStyle.BorderForeground(lipgloss.Color(ColorGold))
+	}
+
+	return labelStyle.Width(18).Render(label) + " " + inputStyle.Render(value)
+}
+
+func (m SettingsModel) presetDescription(name string) string {
 	for _, preset := range m.current.Presets {
-		marker := "○"
-		if preset.Name == m.current.ActivePreset {
-			marker = "●"
-		}
-		lines = append(lines, fmt.Sprintf("  %s %-10s %s", marker, preset.Name, preset.Description))
-	}
-	lines = append(lines, "", "[s] save and close        [esc] discard changes")
-	return style.Render(strings.Join(lines, "\n"))
-}
-
-func (m SettingsModel) renderRow(index int, label, value string) string {
-	row := fmt.Sprintf("  %-18s %s", label, value)
-	if index == m.cursor {
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(ColorGold)).
-			Background(lipgloss.Color(ColorDeep)).
-			Render(row)
-	}
-	return row
-}
-
-func (m SettingsModel) renderNumericOrValue(value string) string {
-	if m.editing {
-		switch m.fieldOrder[m.cursor] {
-		case "width", "height", "refresh":
-			return m.input.View()
+		if preset.Name == name {
+			return preset.Description
 		}
 	}
-	return value
-}
-
-func cycleString(values []string, current string, step int) string {
-	if len(values) == 0 {
-		return current
-	}
-	index := 0
-	for idx, value := range values {
-		if value == current {
-			index = idx
-			break
-		}
-	}
-	index = (index + step + len(values)) % len(values)
-	return values[index]
+	return ""
 }

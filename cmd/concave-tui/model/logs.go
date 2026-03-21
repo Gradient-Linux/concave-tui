@@ -211,10 +211,20 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 		case "ctrl+u":
 			m.follow = false
 			m.viewport.HalfViewUp()
+		case "ctrl+f":
+			m.follow = false
+			m.viewport.ViewDown()
+		case "ctrl+b":
+			m.follow = false
+			m.viewport.ViewUp()
 		case "/":
 			m.searching = true
 			m.searchInput.Focus()
 			return m, nil
+		case "n":
+			m.jumpToMatch(true)
+		case "N":
+			m.jumpToMatch(false)
 		case "f":
 			m.follow = true
 			m.syncViewport()
@@ -267,7 +277,7 @@ func (m LogsModel) View() string {
 }
 
 func (m LogsModel) HelpView() string {
-	return "Logs\n↑/↓ container · / search · f follow · pgup/pgdown scroll"
+	return "Logs\n↑/↓ container · / search · f follow · n/N next-prev match · ctrl+d/u half page"
 }
 
 func loadLogsTargetsCmd() tea.Cmd {
@@ -336,6 +346,48 @@ func (m *LogsModel) syncViewport() {
 	m.viewport.SetContent(strings.Join(lines, "\n"))
 	if m.follow {
 		m.viewport.GotoBottom()
+	}
+}
+
+func (m *LogsModel) jumpToMatch(forward bool) {
+	query := strings.TrimSpace(strings.ToLower(m.searchInput.Value()))
+	if query == "" || len(m.lines) == 0 {
+		return
+	}
+	start := m.viewport.YOffset
+	if !forward && start == 0 {
+		start = len(m.lines)
+	}
+	if forward {
+		for idx := start + 1; idx < len(m.lines); idx++ {
+			if strings.Contains(strings.ToLower(m.lines[idx]), query) {
+				m.follow = false
+				m.viewport.SetYOffset(idx)
+				return
+			}
+		}
+		for idx := 0; idx <= start && idx < len(m.lines); idx++ {
+			if strings.Contains(strings.ToLower(m.lines[idx]), query) {
+				m.follow = false
+				m.viewport.SetYOffset(idx)
+				return
+			}
+		}
+		return
+	}
+	for idx := start - 1; idx >= 0; idx-- {
+		if strings.Contains(strings.ToLower(m.lines[idx]), query) {
+			m.follow = false
+			m.viewport.SetYOffset(idx)
+			return
+		}
+	}
+	for idx := len(m.lines) - 1; idx >= start && idx >= 0; idx-- {
+		if strings.Contains(strings.ToLower(m.lines[idx]), query) {
+			m.follow = false
+			m.viewport.SetYOffset(idx)
+			return
+		}
 	}
 }
 

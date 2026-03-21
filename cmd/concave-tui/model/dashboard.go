@@ -70,6 +70,11 @@ type dashboardWidget struct {
 	render func(width, height int, style string) string
 }
 
+type renderedWidget struct {
+	content string
+	height  int
+}
+
 func (w dashboardWidget) ID() string                                    { return w.id }
 func (w dashboardWidget) Title() string                                 { return w.title }
 func (w dashboardWidget) Render(width, height int, style string) string { return w.render(width, height, style) }
@@ -106,6 +111,14 @@ func NewDashboardModel() DashboardModel {
 
 func (m *DashboardModel) SetConfig(cfg tuiconfig.Config) {
 	m.cfg = cfg
+}
+
+func (m *DashboardModel) SetPreset(name string) {
+	if _, ok := m.cfg.PresetByName(name); ok {
+		m.cfg.ActivePreset = name
+		return
+	}
+	m.cfg.ActivePreset = "default"
 }
 
 func (m *DashboardModel) Activate() tea.Cmd {
@@ -180,17 +193,14 @@ func (m DashboardModel) View() string {
 		return mutedText("No dashboard widgets configured for the active preset")
 	}
 
-	columns := dashboardColumnsForWidth(m.width)
-	columnWidth := max(22, (m.width-(columns-1)*2)/columns)
-	buckets := make([][]string, columns)
-	for idx, widget := range widgets {
-		target := idx % columns
-		buckets[target] = append(buckets[target], m.renderWidgetCard(widget, columnWidth, style))
-	}
-
-	rendered := make([]string, 0, columns)
-	for _, items := range buckets {
-		rendered = append(rendered, strings.Join(items, "\n\n"))
+	layout := m.layoutWidgets(widgets, m.width, m.height, style)
+	rendered := make([]string, 0, len(layout))
+	for _, items := range layout {
+		columnParts := make([]string, 0, len(items))
+		for _, item := range items {
+			columnParts = append(columnParts, item.content)
+		}
+		rendered = append(rendered, strings.Join(columnParts, "\n"))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 }
@@ -281,14 +291,40 @@ func (m DashboardModel) widgetByID(id string) (Widget, bool) {
 	}
 }
 
-func (m DashboardModel) renderWidgetCard(widget Widget, width int, style string) string {
-	body := widget.Render(width-4, max(6, m.height/3), style)
+func (m DashboardModel) renderWidgetCard(widget Widget, width, height int, style string) string {
+	bodyHeight := max(3, height-3)
+	body := padToHeight(widget.Render(width-4, bodyHeight, style), bodyHeight)
 	return lipgloss.NewStyle().
 		Width(width).
+		Height(height).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(ColorDeep)).
 		Padding(0, 1).
 		Render(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(widget.Title()) + "\n" + body)
+}
+
+func (m DashboardModel) layoutWidgets(widgets []Widget, contentWidth, contentHeight int, style string) [][]renderedWidget {
+	if len(widgets) == 0 {
+		return nil
+	}
+	columns := min(dashboardColumnsForWidth(contentWidth), len(widgets))
+	columnWidth := max(22, (contentWidth-(columns-1)*2)/columns)
+	buckets := make([][]Widget, columns)
+	for idx, widget := range widgets {
+		buckets[idx%columns] = append(buckets[idx%columns], widget)
+	}
+
+	result := make([][]renderedWidget, columns)
+	for idx, bucket := range buckets {
+		heights := distributeHeight(bucket, contentHeight)
+		for itemIdx, widget := range bucket {
+			result[idx] = append(result[idx], renderedWidget{
+				content: m.renderWidgetCard(widget, columnWidth, heights[itemIdx], style),
+				height:  heights[itemIdx],
+			})
+		}
+	}
+	return result
 }
 
 func (m DashboardModel) renderGPUWidget(index, width, height int, style string) string {
@@ -576,6 +612,74 @@ func dashboardColumnsForWidth(width int) int {
 		return 2
 	default:
 		return 1
+	}
+}
+
+func distributeHeight(widgets []Widget, contentHeight int) []int {
+	if len(widgets) == 0 {
+		return nil
+	}
+
+	gaps := max(0, len(widgets)-1)
+	available := max(len(widgets)*4, contentHeight-gaps)
+	heights := make([]int, len(widgets))
+	shortIdx := make([]int, 0, len(widgets))
+	tallIdx := make([]int, 0, len(widgets))
+
+	for idx, widget := range widgets {
+		if isTallWidget(widget.ID()) {
+			tallIdx = append(tallIdx, idx)
+		} else {
+			shortIdx = append(shortIdx, idx)
+		}
+	}
+
+	if len(tallIdx) == 0 {
+		return evenHeights(available, len(widgets))
+	}
+
+	shortMin := 6
+	tallMin := 8
+	if available < len(shortIdx)*shortMin+len(tallIdx)*tallMin {
+		return evenHeights(available, len(widgets))
+	}
+
+	reserved := len(shortIdx) * shortMin
+	for _, idx := range shortIdx {
+		heights[idx] = shortMin
+	}
+	tallHeights := evenHeights(available-reserved, len(tallIdx))
+	for idx, widgetIdx := range tallIdx {
+		heights[widgetIdx] = max(tallMin, tallHeights[idx])
+	}
+	return heights
+}
+
+func evenHeights(total, count int) []int {
+	if count <= 0 {
+		return nil
+	}
+	base := total / count
+	if base < 4 {
+		base = 4
+	}
+	extra := total % count
+	heights := make([]int, count)
+	for idx := range heights {
+		heights[idx] = base
+		if idx < extra {
+			heights[idx]++
+		}
+	}
+	return heights
+}
+
+func isTallWidget(id string) bool {
+	switch id {
+	case "gpu-graph", "gpu-graph-2":
+		return true
+	default:
+		return false
 	}
 }
 

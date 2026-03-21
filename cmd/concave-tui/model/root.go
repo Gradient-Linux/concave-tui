@@ -126,6 +126,7 @@ type RootModel struct {
 	err          error
 	version      string
 	cfg          tuiconfig.Config
+	lastKey      string
 }
 
 func init() {
@@ -191,6 +192,9 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboard.SetConfig(m.cfg)
 		m.applyLayout()
 		return m, saveTUIConfigCmd(m.cfg)
+	case PresetChangedMsg:
+		m.dashboard.SetPreset(msg.PresetName)
+		return m, nil
 	case settingsDiscardedMsg:
 		m.showSettings = false
 		m.settings.SetConfig(m.cfg)
@@ -232,38 +236,37 @@ func (m *RootModel) View() string {
 		return "Terminal too narrow — resize to at least 80 columns"
 	}
 
-	innerWidth := max(78, m.width-2)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), m.contentView())
-	if m.showHelp {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, "", centeredOverlay(innerWidth, m.helpOverlay()))
+	frame := m.renderFrame()
+	if m.err != nil {
+		frame += "\n" + errorText(m.err.Error())
 	}
 	if m.showSettings {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, "", centeredOverlay(innerWidth, m.settings.View()))
+		return m.renderModal(frame, m.settings.View())
 	}
-	if m.err != nil {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, "", errorText(m.err.Error()))
+	if m.showHelp {
+		return m.renderModal(frame, m.helpOverlay())
 	}
-
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(ColorDeep)).
-		Render(strings.Join([]string{
-			m.headerView(),
-			body,
-			m.footerView(),
-		}, "\n"))
+	return frame
 }
 
 func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if msg.String() != "g" {
+		m.lastKey = ""
+	}
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return true, tea.Quit
 	case "?", "f1":
+		if m.showSettings {
+			return false, nil
+		}
 		m.showHelp = !m.showHelp
 		return true, nil
 	case ",":
+		if m.showHelp {
+			m.showHelp = false
+		}
 		m.showSettings = true
-		m.showHelp = false
 		m.settings.SetConfig(m.cfg)
 		m.dashboard.SetConfig(m.settings.Current())
 		m.applyLayout()
@@ -287,13 +290,22 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		return true, m.switchView(next)
 	case "p":
+		if m.showSettings {
+			return false, nil
+		}
 		m.cfg.ActivePreset = nextPresetName(m.cfg)
 		m.dashboard.SetConfig(m.cfg)
 		return true, nil
 	case "ctrl+b":
-		m.toggleSidebar()
+		if m.showSettings {
+			return false, nil
+		}
+		m.pageUpFull()
 		return true, nil
 	case "b":
+		if m.showSettings {
+			return false, nil
+		}
 		if m.activeView != ViewSuites && m.activeView != ViewWorkspace {
 			m.toggleSidebar()
 			return true, nil
@@ -303,6 +315,53 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
 			m.showHelp = false
 			return true, nil
 		}
+	case "g":
+		if m.showSettings {
+			return false, nil
+		}
+		if m.lastKey == "g" {
+			m.lastKey = ""
+			m.jumpTop()
+			return true, nil
+		}
+		m.lastKey = "g"
+		return true, nil
+	case "G":
+		if m.showSettings {
+			return false, nil
+		}
+		m.jumpBottom()
+		return true, nil
+	case "ctrl+d":
+		if m.showSettings {
+			return false, nil
+		}
+		m.pageDownHalf()
+		return true, nil
+	case "ctrl+u":
+		if m.showSettings {
+			return false, nil
+		}
+		m.pageUpHalf()
+		return true, nil
+	case "ctrl+f":
+		if m.showSettings {
+			return false, nil
+		}
+		m.pageDownFull()
+		return true, nil
+	case "n":
+		if m.showSettings {
+			return false, nil
+		}
+		m.nextSearchMatch()
+		return true, nil
+	case "N":
+		if m.showSettings {
+			return false, nil
+		}
+		m.prevSearchMatch()
+		return true, nil
 	}
 	return false, nil
 }
@@ -405,7 +464,7 @@ func (m *RootModel) contentView() string {
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(ColorDeep)).
 		Padding(0, 1)
-	return style.Render(m.activeContent())
+	return style.Render(padToHeight(m.activeContent(), m.contentHeight()))
 }
 
 func (m *RootModel) sidebarView() string {
@@ -460,25 +519,75 @@ func (m *RootModel) helpOverlay() string {
 	box := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ColorGold)).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(ColorGold)).
-		Padding(0, 1)
+		BorderForeground(lipgloss.Color(ColorDeep)).
+		Padding(1, 2)
 	return box.Render(m.activeHelp())
 }
 
 func (m *RootModel) activeHelp() string {
+	lines := []string{
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Keybindings"),
+		"",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Navigation"),
+		"j / k          move up / down",
+		"h / l          move left / right",
+		"g g            jump to top",
+		"G              jump to bottom",
+		"ctrl+d / u     scroll half page",
+		"ctrl+f / b     scroll full page",
+		"1-5            switch view",
+		"",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Actions ("+sidebarLabel(m.activeView)+" view)"),
+	}
+	lines = append(lines, m.activeHelpActions()...)
+	lines = append(lines,
+		"",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Global"),
+		"b              toggle sidebar",
+		",              settings",
+		"p              cycle preset",
+		"q              quit",
+		"",
+		"esc / ? / F1   close this overlay",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (m *RootModel) activeHelpActions() []string {
 	switch m.activeView {
 	case ViewDashboard:
-		return m.dashboard.HelpView()
+		return []string{
+			"r              refresh dashboard",
+		}
 	case ViewSuites:
-		return m.suites.HelpView()
+		return []string{
+			"i              install suite",
+			"r              remove suite",
+			"u              update suite",
+			"R              rollback suite",
+			"s / x          start / stop suite",
+			"b              shell into suite",
+			"e              exec command in suite",
+			"l              open JupyterLab",
+		}
 	case ViewLogs:
-		return m.logs.HelpView()
+		return []string{
+			"/              search logs",
+			"f              resume follow",
+			"n / N          next / previous match",
+		}
 	case ViewWorkspace:
-		return m.workspace.HelpView()
+		return []string{
+			"b              backup notebooks + models",
+			"x              clean outputs",
+			"r              refresh workspace",
+		}
 	case ViewDoctor:
-		return m.doctor.HelpView()
+		return []string{
+			"r              rerun checks",
+		}
 	default:
-		return ""
+		return nil
 	}
 }
 
@@ -495,7 +604,105 @@ func (m *RootModel) headerView() string {
 func (m *RootModel) footerView() string {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ColorMuted)).
-		Render("tab next · shift+tab prev · b sidebar · , settings · p presets · F1 help · q quit")
+		Render(fmt.Sprintf("%s │ tab next · shift+tab prev · b sidebar · , settings · p presets · F1 help · q quit", m.currentMode()))
+}
+
+func (m *RootModel) currentMode() string {
+	if m.showSettings && m.settings.IsInsertMode() {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("INSERT")
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("NORMAL")
+}
+
+func (m *RootModel) renderFrame() string {
+	body := lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), m.contentView())
+	return lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color(ColorDeep)).
+		Render(strings.Join([]string{
+			m.headerView(),
+			body,
+			m.footerView(),
+		}, "\n"))
+}
+
+func (m *RootModel) renderModal(background, panel string) string {
+	width := max(minWidth, m.width)
+	height := max(24, m.height)
+	dimmed := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#3a3a4a")).
+		Render(stripANSI(background))
+	placed := lipgloss.Place(
+		width,
+		height,
+		lipgloss.Center,
+		lipgloss.Center,
+		panel,
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("#3a3a4a")),
+	)
+	return mergeOverlayRows(dimmed, placed, width, height)
+}
+
+func (m *RootModel) jumpTop() {
+	switch m.activeView {
+	case ViewSuites:
+		m.suites.selected = 0
+	case ViewLogs:
+		m.logs.follow = false
+		m.logs.viewport.GotoTop()
+	}
+}
+
+func (m *RootModel) jumpBottom() {
+	switch m.activeView {
+	case ViewSuites:
+		if len(m.suites.rows) > 0 {
+			m.suites.selected = len(m.suites.rows) - 1
+		}
+	case ViewLogs:
+		m.logs.follow = true
+		m.logs.syncViewport()
+	}
+}
+
+func (m *RootModel) pageDownHalf() {
+	if m.activeView == ViewLogs {
+		m.logs.follow = false
+		m.logs.viewport.HalfViewDown()
+	}
+}
+
+func (m *RootModel) pageUpHalf() {
+	if m.activeView == ViewLogs {
+		m.logs.follow = false
+		m.logs.viewport.HalfViewUp()
+	}
+}
+
+func (m *RootModel) pageDownFull() {
+	if m.activeView == ViewLogs {
+		m.logs.follow = false
+		m.logs.viewport.ViewDown()
+	}
+}
+
+func (m *RootModel) pageUpFull() {
+	if m.activeView == ViewLogs {
+		m.logs.follow = false
+		m.logs.viewport.ViewUp()
+	}
+}
+
+func (m *RootModel) nextSearchMatch() {
+	if m.activeView == ViewLogs {
+		m.logs.jumpToMatch(true)
+	}
+}
+
+func (m *RootModel) prevSearchMatch() {
+	if m.activeView == ViewLogs {
+		m.logs.jumpToMatch(false)
+	}
 }
 
 func saveTUIConfigCmd(cfg tuiconfig.Config) tea.Cmd {
@@ -557,10 +764,6 @@ func sidebarLabel(view View) string {
 	default:
 		return ""
 	}
-}
-
-func centeredOverlay(width int, body string) string {
-	return lipgloss.PlaceHorizontal(max(40, width), lipgloss.Center, body)
 }
 
 func gradientText(text string) string {
@@ -803,4 +1006,37 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func padToHeight(content string, height int) string {
+	if height <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func stripANSI(input string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return re.ReplaceAllString(input, "")
+}
+
+func mergeOverlayRows(background, overlay string, _ int, height int) string {
+	bgLines := strings.Split(padToHeight(background, height), "\n")
+	ovLines := strings.Split(padToHeight(overlay, height), "\n")
+	merged := make([]string, 0, height)
+	for idx := 0; idx < height && idx < len(bgLines) && idx < len(ovLines); idx++ {
+		if strings.TrimSpace(stripANSI(ovLines[idx])) == "" {
+			merged = append(merged, bgLines[idx])
+			continue
+		}
+		merged = append(merged, ovLines[idx])
+	}
+	return strings.Join(merged, "\n")
 }

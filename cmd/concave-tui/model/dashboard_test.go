@@ -60,6 +60,10 @@ func TestDashboardPresetMappingAndColumns(t *testing.T) {
 	if dashboardColumnsForWidth(79) != 1 || dashboardColumnsForWidth(80) != 2 || dashboardColumnsForWidth(159) != 2 || dashboardColumnsForWidth(160) != 3 {
 		t.Fatal("unexpected dashboard column mapping")
 	}
+	m.SetPreset("mlops")
+	if m.cfg.ActivePreset != "mlops" {
+		t.Fatalf("active preset = %q", m.cfg.ActivePreset)
+	}
 }
 
 func TestDashboardHistoryCapsAt60AndBarFallback(t *testing.T) {
@@ -144,5 +148,35 @@ func TestDashboardTickAndHelpers(t *testing.T) {
 	}
 	if humanBytes(1024) == "" {
 		t.Fatal("expected dashboard helpers")
+	}
+}
+
+func TestDashboardLayoutFillsColumnHeight(t *testing.T) {
+	m := NewDashboardModel()
+	m.SetConfig(tuiconfig.DefaultConfig())
+	m.loading = false
+	m.width = 120
+	m.height = 24
+	m.metrics = dashboardMetrics{
+		GPUState: gpu.GPUStateNVIDIA,
+		GPUs:     []gpu.NVIDIADevice{{Index: 0, Name: "RTX", Utilization: 42, MemoryUsedMiB: 8, MemoryTotalMiB: 16}},
+		Suites:   []dashboardSuiteState{{Name: "boosting", Installed: true, Total: 3, Running: 3}},
+	}
+
+	layout := m.layoutWidgets(m.widgets(), m.width, m.height, "bar")
+	if len(layout) == 0 {
+		t.Fatal("expected widget layout")
+	}
+	for _, column := range layout {
+		total := 0
+		for idx, item := range column {
+			total += item.height
+			if idx < len(column)-1 {
+				total++
+			}
+		}
+		if total != m.height {
+			t.Fatalf("column total = %d, want %d", total, m.height)
+		}
 	}
 }
