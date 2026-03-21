@@ -228,6 +228,14 @@ func doctorSuiteCheck(name string) doctorCheck {
 
 	s, err := currentSuiteDefinition(name)
 	if err != nil {
+		if isMissingForgeSelection(err) && name == "forge" {
+			return doctorCheck{
+				name:     name,
+				status:   "warn",
+				detail:   "installed but not configured",
+				recovery: "└─ run: concave remove forge, then reinstall forge",
+			}
+		}
 		return doctorCheck{name: name, status: "fail", detail: err.Error()}
 	}
 

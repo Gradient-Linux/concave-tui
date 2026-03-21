@@ -31,6 +31,7 @@ type dashboardSuiteState struct {
 	Running    int
 	Ports      []string
 	Containers []dashboardContainerState
+	Warning    string
 }
 
 type dashboardContainerState struct {
@@ -365,6 +366,11 @@ func (m DashboardModel) renderSuiteStatusWidget() string {
 			lines = append(lines, fmt.Sprintf("%-10s %s not installed", item.Name, mutedText("—")))
 			continue
 		}
+		if item.Warning != "" {
+			lines = append(lines, fmt.Sprintf("%-10s %s %s", item.Name, warnText("⚠"), item.Warning))
+			lines = append(lines, "  remove and reinstall forge to restore its saved component set")
+			continue
+		}
 		icon := successText("●")
 		state := fmt.Sprintf("%d / %d", item.Running, item.Total)
 		if item.Running == 0 {
@@ -520,6 +526,14 @@ func collectDashboardMetrics(ordered []string) (dashboardMetrics, error) {
 		}
 		s, err := currentSuiteDefinition(name)
 		if err != nil {
+			if isMissingForgeSelection(err) && name == "forge" {
+				metrics.Suites = append(metrics.Suites, dashboardSuiteState{
+					Name:      name,
+					Installed: true,
+					Warning:   "installed but not configured",
+				})
+				continue
+			}
 			return dashboardMetrics{}, err
 		}
 		item := dashboardSuiteState{

@@ -25,6 +25,7 @@ type suiteRow struct {
 	Running   int
 	Total     int
 	Detail    suiteDetail
+	Problem   string
 }
 
 type suiteDetail struct {
@@ -285,7 +286,12 @@ func (m SuitesModel) currentRow() suiteRow {
 }
 
 func (m SuitesModel) detailView(row suiteRow) []string {
-	lines := []string{fmt.Sprintf("%s   %s", row.Name, row.State), "", "Container              Status    Image"}
+	lines := []string{fmt.Sprintf("%s   %s", row.Name, row.State)}
+	if row.Problem != "" {
+		lines = append(lines, "", row.Problem, "Run concave remove forge, then reinstall it.")
+		return lines
+	}
+	lines = append(lines, "", "Container              Status    Image")
 	for _, container := range row.Detail.Suite.Containers {
 		current := row.Detail.Current[container.Name]
 		previous := row.Detail.Previous[container.Name]
@@ -355,6 +361,12 @@ func loadSuitesCmd() tea.Cmd {
 				row.Image = currentImageForFirstContainer(name, manifest)
 				s, err := currentSuiteDefinition(name)
 				if err != nil {
+					if isMissingForgeSelection(err) && name == "forge" {
+						row.State = "⚠ unconfigured"
+						row.Problem = "Forge is marked installed but its component selection was not saved."
+						rows = append(rows, row)
+						continue
+					}
 					return suitesLoadedMsg{err: err}
 				}
 				row.Detail = suiteDetail{

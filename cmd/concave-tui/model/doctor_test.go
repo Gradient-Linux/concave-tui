@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	cfgstore "github.com/Gradient-Linux/concave-tui/internal/config"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 )
 
@@ -75,6 +76,21 @@ func TestDoctorSuiteCheckPartialFailure(t *testing.T) {
 		t.Fatalf("doctorSuiteCheck() status = %q", check.status)
 	}
 	if !strings.Contains(check.recovery, "concave start neural") {
+		t.Fatalf("doctorSuiteCheck() recovery = %q", check.recovery)
+	}
+}
+
+func TestDoctorSuiteCheckUnconfiguredForge(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return true, nil }
+	loadManifestFn = func() (cfgstore.VersionManifest, error) { return cfgstore.VersionManifest{}, nil }
+
+	check := doctorSuiteCheck("forge")
+	if check.status != "warn" {
+		t.Fatalf("doctorSuiteCheck() status = %q", check.status)
+	}
+	if !strings.Contains(check.recovery, "reinstall forge") {
 		t.Fatalf("doctorSuiteCheck() recovery = %q", check.recovery)
 	}
 }

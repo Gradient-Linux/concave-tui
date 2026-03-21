@@ -126,6 +126,28 @@ func TestLoadSuitesCmdReflectsInstalledState(t *testing.T) {
 	}
 }
 
+func TestLoadSuitesCmdMarksUnconfiguredForge(t *testing.T) {
+	restoreModelDeps(t)
+
+	loadStateFn = func() (cfgstore.State, error) {
+		return cfgstore.State{Installed: []string{"forge"}}, nil
+	}
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{}, nil
+	}
+
+	msg := loadSuitesCmd()().(suitesLoadedMsg)
+	if msg.err != nil {
+		t.Fatalf("loadSuitesCmd() error = %v", msg.err)
+	}
+	if msg.rows[3].State != "⚠ unconfigured" {
+		t.Fatalf("forge state = %q", msg.rows[3].State)
+	}
+	if !strings.Contains(msg.rows[3].Problem, "component selection") {
+		t.Fatalf("forge problem = %q", msg.rows[3].Problem)
+	}
+}
+
 func TestSuitesUpdateRemoveAndUpdateCancel(t *testing.T) {
 	m := NewSuitesModel()
 	m.rows = []suiteRow{{Name: "boosting", Installed: true}}

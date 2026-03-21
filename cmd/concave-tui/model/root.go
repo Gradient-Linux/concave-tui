@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os/exec"
@@ -85,6 +86,8 @@ var (
 )
 
 var viewOrder = []string{"boosting", "neural", "flow", "forge"}
+
+var errForgeSelectionMissing = errors.New("forge has no recorded component selection")
 
 type View int
 
@@ -677,7 +680,7 @@ func currentSuiteDefinition(name string) (suite.Suite, error) {
 	}
 	containers, ok := manifest[name]
 	if !ok || len(containers) == 0 {
-		return suite.Suite{}, fmt.Errorf("forge has no recorded component selection")
+		return suite.Suite{}, errForgeSelectionMissing
 	}
 
 	names := make([]string, 0, len(containers))
@@ -696,6 +699,10 @@ func currentSuiteDefinition(name string) (suite.Suite, error) {
 	s.Ports = selection.Ports
 	s.Volumes = selection.Volumes
 	return s, nil
+}
+
+func isMissingForgeSelection(err error) bool {
+	return errors.Is(err, errForgeSelectionMissing)
 }
 
 func writeComposeForSuite(name string) (string, error) {
@@ -738,6 +745,9 @@ func runDockerOutput(ctx context.Context, args ...string) ([]byte, error) {
 func openLabURL(name string) (string, error) {
 	s, err := currentSuiteDefinition(name)
 	if err != nil {
+		if isMissingForgeSelection(err) && name == "forge" {
+			return "", fmt.Errorf("forge is marked installed but has no recorded component selection; run concave remove forge, then reinstall it")
+		}
 		return "", err
 	}
 	container, ok := suiteJupyterFn(s)

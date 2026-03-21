@@ -280,6 +280,9 @@ func loadLogsTargetsCmd() tea.Cmd {
 		for _, name := range orderedInstalledSuites(state.Installed) {
 			s, err := currentSuiteDefinition(name)
 			if err != nil {
+				if isMissingForgeSelection(err) && name == "forge" {
+					continue
+				}
 				return logsLoadedMsg{err: err}
 			}
 			for _, container := range s.Containers {
