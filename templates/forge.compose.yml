@@ -1,0 +1,153 @@
+# Gradient Linux — Forge Compose Template
+# Managed by concave — do not edit manually
+# Variables substituted at install time by internal/docker/compose.go
+services:
+  gradient-boost-core:
+    image: python:3.12-slim
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    profiles: ["disabled"]
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+      - "{{WORKSPACE_ROOT}}/mlruns:/mlruns"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-boost-lab:
+    image: quay.io/jupyter/base-notebook:python-3.11.6
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "8888:8888"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+      - "{{WORKSPACE_ROOT}}/mlruns:/mlruns"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-boost-track:
+    image: ghcr.io/mlflow/mlflow:2.14
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/mlruns:/mlruns"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-neural-torch:
+    image: pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    profiles: ["disabled"]
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-neural-infer:
+    image: nvidia/cuda:12.4-runtime-ubuntu24.04
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-neural-lab:
+    image: quay.io/jupyter/base-notebook:python-3.11.6
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "8888:8888"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-mlflow:
+    image: ghcr.io/mlflow/mlflow:2.14
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/mlruns:/mlruns"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-airflow:
+    image: apache/airflow:2.9.0
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/dags:/opt/airflow/dags"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-prometheus:
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-grafana:
+    image: grafana/grafana:10.4.0
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-store:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "9001:9001"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/models:/data"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-serve:
+    image: bentoml/bentoml:1.2.0
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    profiles: ["disabled"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+networks:
+  "{{COMPOSE_NETWORK}}": {}

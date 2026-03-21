@@ -1,0 +1,11 @@
+/concave-tui
+/cover.out
+/dist/
+coverage.out
+coverage.html
+mem.out
+cpu.out
+.DS_Store
+.idea/
+.vscode/
+AGENTS.md

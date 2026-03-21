@@ -1,0 +1,58 @@
+# Gradient Linux — Neural Compose Template
+# Managed by concave — do not edit manually
+# Variables substituted at install time by internal/docker/compose.go
+services:
+  gradient-neural-torch:
+    image: pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-neural-infer:
+    image: nvidia/cuda:12.4-runtime-ubuntu24.04
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-neural-lab:
+    image: quay.io/jupyter/base-notebook:python-3.11.6
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    working_dir: /notebooks
+    volumes:
+      - "{{WORKSPACE_ROOT}}/data:/data"
+      - "{{WORKSPACE_ROOT}}/notebooks:/notebooks"
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+networks:
+  "{{COMPOSE_NETWORK}}": {}

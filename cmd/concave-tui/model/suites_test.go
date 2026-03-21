@@ -1,0 +1,450 @@
+package model
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Gradient-Linux/concave-tui/internal/config"
+	"github.com/Gradient-Linux/concave-tui/internal/gpu"
+	"github.com/Gradient-Linux/concave-tui/internal/suite"
+)
+
+func TestPerformInstallSuccess(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return false, nil }
+	loadStateFn = func() (config.State, error) { return config.State{Installed: nil}, nil }
+	loadManifestFn = func() (config.VersionManifest, error) { return config.VersionManifest{}, nil }
+	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
+
+	var pulled []string
+	dockerTagPreviousFn = func(image string) error { return nil }
+	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error {
+		pulled = append(pulled, image)
+		if cb != nil {
+			cb("pulling " + image)
+		}
+		return nil
+	}
+
+	composeWritten := false
+	dockerWriteComposeFn = func(name string) (string, error) {
+		composeWritten = true
+		return "/tmp/" + name + ".compose.yml", nil
+	}
+
+	saved := config.VersionManifest{}
+	saveManifestFn = func(manifest config.VersionManifest) error {
+		saved = manifest
+		return nil
+	}
+
+	added := ""
+	addSuiteFn = func(name string) error {
+		added = name
+		return nil
+	}
+
+	var progress []string
+	if err := performInstall("boosting", func(line string) { progress = append(progress, line) }); err != nil {
+		t.Fatalf("performInstall() error = %v", err)
+	}
+	if !composeWritten {
+		t.Fatal("expected compose file to be written")
+	}
+	if added != "boosting" {
+		t.Fatalf("added suite = %q", added)
+	}
+	if len(pulled) != len(suite.Registry["boosting"].Containers) {
+		t.Fatalf("pulled %d images, want %d", len(pulled), len(suite.Registry["boosting"].Containers))
+	}
+	if len(saved["boosting"]) == 0 {
+		t.Fatalf("manifest not updated: %#v", saved)
+	}
+	if len(progress) == 0 {
+		t.Fatal("expected streamed progress")
+	}
+}
+
+func TestPerformInstallStopsBeforeComposeOnPullFailure(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return false, nil }
+	loadStateFn = func() (config.State, error) { return config.State{}, nil }
+	dockerTagPreviousFn = func(image string) error { return nil }
+	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error {
+		return errors.New("pull failed")
+	}
+
+	composeWritten := false
+	dockerWriteComposeFn = func(name string) (string, error) {
+		composeWritten = true
+		return "", nil
+	}
+
+	err := performInstall("boosting", func(string) {})
+	if err == nil {
+		t.Fatal("expected install error")
+	}
+	if composeWritten {
+		t.Fatal("compose should not be written on pull failure")
+	}
+}
+
+func TestLoadSuitesCmdReflectsInstalledState(t *testing.T) {
+	restoreModelDeps(t)
+
+	loadStateFn = func() (config.State, error) {
+		return config.State{Installed: []string{"boosting"}}, nil
+	}
+	loadManifestFn = func() (config.VersionManifest, error) {
+		return config.VersionManifest{
+			"boosting": {
+				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
+				"gradient-boost-lab":   {Current: "custom/jupyter"},
+				"gradient-boost-track": {Current: "ghcr.io/mlflow/mlflow:2.14"},
+			},
+		}, nil
+	}
+	dockerStatusFn = func(ctx context.Context, name string) (string, error) {
+		return "running", nil
+	}
+
+	msg := loadSuitesCmd()().(suitesLoadedMsg)
+	if msg.err != nil {
+		t.Fatalf("loadSuitesCmd() error = %v", msg.err)
+	}
+	if msg.rows[0].State != "● running" {
+		t.Fatalf("row state = %q", msg.rows[0].State)
+	}
+	if msg.rows[3].State != "— not installed" {
+		t.Fatalf("forge state = %q", msg.rows[3].State)
+	}
+}
+
+func TestSuitesUpdateRemoveCancel(t *testing.T) {
+	m := NewSuitesModel()
+	m.rows = []suiteRow{{Name: "boosting", Installed: true}}
+	m.confirmRemove = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.confirmRemove {
+		t.Fatal("expected remove confirmation to cancel")
+	}
+}
+
+func TestPerformRollbackRequiresPreviousVersion(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return true, nil }
+	loadManifestFn = func() (config.VersionManifest, error) {
+		return config.VersionManifest{
+			"boosting": {
+				"gradient-boost-core": {Current: "python:3.12-slim"},
+			},
+		}, nil
+	}
+
+	err := performRollback("boosting", func(string) {})
+	if err == nil || !strings.Contains(err.Error(), "no previous version") {
+		t.Fatalf("performRollback() error = %v", err)
+	}
+}
+
+func TestSuitesUpdateHandlesShellResumeMessage(t *testing.T) {
+	m := NewSuitesModel()
+	m.rows = []suiteRow{{Name: "boosting", Installed: true}}
+
+	updated, _ := m.Update(suiteOperationMsg{done: true, note: "shell exited"})
+	if updated.note != "shell exited" {
+		t.Fatalf("note = %q", updated.note)
+	}
+}
+
+func TestSuitesViewHelpersAndKeyPaths(t *testing.T) {
+	m := NewSuitesModel()
+	m.loading = false
+	m.rows = []suiteRow{
+		{
+			Name:      "boosting",
+			Installed: true,
+			State:     "● running",
+			Image:     "python:3.12-slim",
+			Detail: suiteDetail{
+				Suite: suite.Suite{
+					Name: "boosting",
+					Containers: []suite.Container{
+						{Name: "gradient-boost-core", Image: "python:3.12-slim", Role: "Core"},
+					},
+					Ports:   []suite.PortMapping{{Port: 8888, Service: "JupyterLab"}},
+					Volumes: []suite.VolumeMount{{HostPath: "models", ContainerPath: "/models"}},
+				},
+				Current:  map[string]string{"gradient-boost-core": "python:3.12-slim"},
+				Previous: map[string]string{"gradient-boost-core": "python:3.11-slim"},
+			},
+		},
+	}
+	m.showDetail = true
+
+	if m.HelpView() == "" || m.View() == "" {
+		t.Fatal("expected suites help/view output")
+	}
+	if m.currentRow().Name != "boosting" {
+		t.Fatalf("currentRow() = %#v", m.currentRow())
+	}
+	if len(m.detailView(m.rows[0])) == 0 {
+		t.Fatal("expected detail lines")
+	}
+	if truncate("abcdef", 4) != "abc…" {
+		t.Fatalf("unexpected truncate result")
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if updated.showDetail {
+		t.Fatal("expected enter to toggle detail off")
+	}
+}
+
+func TestPerformUpdateStartStopRestartAndRemove(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return true, nil }
+	loadManifestFn = func() (config.VersionManifest, error) {
+		return config.VersionManifest{
+			"boosting": {
+				"gradient-boost-core": {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
+			},
+		}, nil
+	}
+
+	dockerTagPreviousFn = func(image string) error { return nil }
+	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error { return nil }
+	saveManifestFn = func(manifest config.VersionManifest) error { return nil }
+	dockerWriteComposeFn = func(name string) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
+	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
+
+	upCalls := 0
+	downCalls := 0
+	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error {
+		upCalls++
+		return nil
+	}
+	dockerComposeDownFn = func(ctx context.Context, path string) error {
+		downCalls++
+		return nil
+	}
+	systemRegisterFn = func(s suite.Suite) error { return nil }
+	systemDeregisterFn = func(s suite.Suite) error { return nil }
+	runComposeRemoveFn = func(ctx context.Context, composePath string) error { return nil }
+	removeSuiteFn = func(name string) error { return nil }
+
+	if err := performUpdate("boosting", func(string) {}); err != nil {
+		t.Fatalf("performUpdate() error = %v", err)
+	}
+	if err := performStart("boosting"); err != nil {
+		t.Fatalf("performStart() error = %v", err)
+	}
+	if err := performStop("boosting"); err != nil {
+		t.Fatalf("performStop() error = %v", err)
+	}
+	if err := performRestart("boosting"); err != nil {
+		t.Fatalf("performRestart() error = %v", err)
+	}
+	if err := performRemove("boosting"); err != nil {
+		t.Fatalf("performRemove() error = %v", err)
+	}
+	if upCalls == 0 || downCalls == 0 {
+		t.Fatalf("expected compose up/down calls, got up=%d down=%d", upCalls, downCalls)
+	}
+}
+
+func TestPerformRollbackSuccess(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return true, nil }
+	loadManifestFn = func() (config.VersionManifest, error) {
+		return config.VersionManifest{
+			"boosting": {
+				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
+				"gradient-boost-lab":   {Current: "lab:new", Previous: "lab:old"},
+				"gradient-boost-track": {Current: "mlflow:new", Previous: "mlflow:old"},
+			},
+		}, nil
+	}
+	saveManifestFn = func(manifest config.VersionManifest) error { return nil }
+	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
+	dockerComposeDownFn = func(ctx context.Context, path string) error { return nil }
+	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error { return nil }
+	dockerWriteComposeFn = func(name string) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
+
+	if err := performRollback("boosting", func(string) {}); err != nil {
+		t.Fatalf("performRollback() error = %v", err)
+	}
+}
+
+func TestSuiteOperationHelpersAndInteractiveCommands(t *testing.T) {
+	restoreModelDeps(t)
+
+	m := NewSuitesModel()
+	m.rows = []suiteRow{
+		{
+			Name:      "boosting",
+			Installed: true,
+			Detail:    suiteDetail{Suite: suite.Registry["boosting"]},
+		},
+	}
+	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
+	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error { return nil }
+	systemRegisterFn = func(s suite.Suite) error { return nil }
+
+	if cmd := m.openShell(); cmd == nil {
+		t.Fatal("expected shell exec cmd")
+	}
+	if cmd := m.execSuiteCommand("python -V"); cmd == nil {
+		t.Fatal("expected exec cmd")
+	}
+
+	ch := make(chan suiteOperationMsg, 1)
+	ch <- suiteOperationMsg{line: "done"}
+	if waitForSuiteOperation(ch)() == nil {
+		t.Fatal("expected wait cmd to yield a message")
+	}
+
+	opCh := make(chan suiteOperationMsg, 4)
+	runSuiteOperation("start", "boosting", opCh)
+	if len(opCh) == 0 {
+		t.Fatal("expected operation messages")
+	}
+	dockerStatusFn = func(ctx context.Context, name string) (string, error) { return "running", nil }
+	dockerOutputFn = func(ctx context.Context, args ...string) ([]byte, error) {
+		return []byte(`{"url":"http://0.0.0.0:8888/","token":"xyz"}`), nil
+	}
+	systemOpenURLFn = func(url string) error { return nil }
+	opCh = make(chan suiteOperationMsg, 4)
+	runSuiteOperation("lab", "boosting", opCh)
+	if len(opCh) == 0 {
+		t.Fatal("expected lab operation messages")
+	}
+	failCalled := false
+	doneCalled := false
+	failOrDone(nil, "ok", func(error) { failCalled = true }, func(string) { doneCalled = true })
+	if failCalled || !doneCalled {
+		t.Fatal("expected success branch in failOrDone")
+	}
+}
+
+func TestRunSuiteOperationCoversRemainingKinds(t *testing.T) {
+	restoreModelDeps(t)
+
+	currentKind := ""
+	isInstalledFn = func(name string) (bool, error) { return currentKind != "install", nil }
+	loadStateFn = func() (config.State, error) { return config.State{}, nil }
+	loadManifestFn = func() (config.VersionManifest, error) {
+		return config.VersionManifest{
+			"boosting": {
+				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
+				"gradient-boost-lab":   {Current: "lab:new", Previous: "lab:old"},
+				"gradient-boost-track": {Current: "mlflow:new", Previous: "mlflow:old"},
+			},
+		}, nil
+	}
+	saveManifestFn = func(manifest config.VersionManifest) error { return nil }
+	addSuiteFn = func(name string) error { return nil }
+	removeSuiteFn = func(name string) error { return nil }
+	dockerTagPreviousFn = func(image string) error { return nil }
+	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error { return nil }
+	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
+	dockerWriteComposeFn = func(name string) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
+	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error { return nil }
+	dockerComposeDownFn = func(ctx context.Context, path string) error { return nil }
+	runComposeRemoveFn = func(ctx context.Context, composePath string) error { return nil }
+	systemRegisterFn = func(s suite.Suite) error { return nil }
+	systemDeregisterFn = func(s suite.Suite) error { return nil }
+	dockerStatusFn = func(ctx context.Context, name string) (string, error) { return "running", nil }
+	dockerOutputFn = func(ctx context.Context, args ...string) ([]byte, error) {
+		return []byte(`{"url":"http://0.0.0.0:8888/","token":"xyz"}`), nil
+	}
+	systemOpenURLFn = func(url string) error { return nil }
+
+	for _, kind := range []string{"install", "update", "rollback", "stop", "restart", "remove", "lab"} {
+		currentKind = kind
+		ch := make(chan suiteOperationMsg, 8)
+		runSuiteOperation(kind, "boosting", ch)
+		if len(ch) == 0 {
+			t.Fatalf("expected messages for %s", kind)
+		}
+	}
+}
+
+func TestStartOperationWaitsForCompletion(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return true, nil }
+	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
+	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error { return nil }
+	systemRegisterFn = func(s suite.Suite) error { return nil }
+
+	m := NewSuitesModel()
+	m.rows = []suiteRow{{Name: "boosting", Installed: true, Detail: suiteDetail{Suite: suite.Registry["boosting"]}}}
+	cmd := m.startOperation("start")
+	if cmd == nil || m.opCh == nil {
+		t.Fatal("expected operation channel")
+	}
+	for range m.opCh {
+	}
+}
+
+func TestSuitesUpdateCoversNavigationAndOperationMessages(t *testing.T) {
+	restoreModelDeps(t)
+
+	m := NewSuitesModel()
+	m.loading = false
+	m.rows = []suiteRow{
+		{Name: "boosting", Installed: true, Detail: suiteDetail{Suite: suite.Registry["boosting"]}},
+		{Name: "flow", Installed: false, Detail: suiteDetail{Suite: suite.Registry["flow"]}},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if updated.selected != 1 {
+		t.Fatalf("selected = %d, want 1", updated.selected)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if updated.selected != 0 {
+		t.Fatalf("selected = %d, want 0", updated.selected)
+	}
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !updated.showDetail {
+		t.Fatal("expected detail to open")
+	}
+	updated, _ = updated.Update(keyRunes("r"))
+	if !updated.confirmRemove {
+		t.Fatal("expected remove confirmation")
+	}
+
+	var cmd tea.Cmd
+	ch := make(chan suiteOperationMsg, 1)
+	ch <- suiteOperationMsg{line: "pulling", note: "done"}
+	updated.opCh = ch
+	updated, cmd = updated.Update(suiteOperationEnvelope{
+		ch:  ch,
+		ok:  true,
+		msg: suiteOperationMsg{line: "pulling", note: "done", done: true},
+	})
+	if cmd == nil || updated.opCh != nil {
+		t.Fatal("expected reload command after done operation")
+	}
+
+	updated.execPrompt = true
+	updated.execInput.SetValue("python -V")
+	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected exec command")
+	}
+	if next.execPrompt {
+		t.Fatal("expected exec prompt to close")
+	}
+}

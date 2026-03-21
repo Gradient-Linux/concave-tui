@@ -1,0 +1,71 @@
+# Gradient Linux — Flow Compose Template
+# Managed by concave — do not edit manually
+# Variables substituted at install time by internal/docker/compose.go
+services:
+  gradient-flow-mlflow:
+    image: ghcr.io/mlflow/mlflow:2.14
+    command: ["mlflow", "ui", "--host", "0.0.0.0", "--port", "5000", "--backend-store-uri", "/mlruns"]
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/mlruns:/mlruns"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-airflow:
+    image: apache/airflow:2.9.0
+    command: ["airflow", "standalone"]
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/dags:/opt/airflow/dags"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-prometheus:
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-grafana:
+    image: grafana/grafana:10.4.0
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-store:
+    image: minio/minio:RELEASE.2024-04-06T05-26-02Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/models:/data"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+  gradient-flow-serve:
+    image: bentoml/bentoml:1.2.0
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - "{{WORKSPACE_ROOT}}/models:/models"
+      - "{{WORKSPACE_ROOT}}/outputs:/outputs"
+    networks: ["{{COMPOSE_NETWORK}}"]
+
+networks:
+  "{{COMPOSE_NETWORK}}": {}
