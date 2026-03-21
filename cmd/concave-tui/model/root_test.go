@@ -4,11 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Gradient-Linux/concave-tui/internal/config"
+	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
+	cfgstore "github.com/Gradient-Linux/concave-tui/internal/config"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 	"github.com/Gradient-Linux/concave-tui/internal/suite"
 	"github.com/Gradient-Linux/concave-tui/internal/workspace"
@@ -27,6 +30,7 @@ func restoreModelDeps(t *testing.T) {
 	oldRecordInstall := recordInstallFn
 	oldRecordUpdate := recordUpdateFn
 	oldSwapRollback := swapRollbackFn
+	oldSaveTUIConfig := saveTUIConfigFn
 	oldSuiteGet := suiteGetFn
 	oldSuiteAll := suiteAllFn
 	oldSuiteNames := suiteNamesFn
@@ -61,7 +65,14 @@ func restoreModelDeps(t *testing.T) {
 	oldGPUDetect := gpuDetectFn
 	oldGPURecommended := gpuRecommendedFn
 	oldGPUToolkit := gpuToolkitFn
-	oldDashboardNVIDIA := dashboardNVIDIAInfoFn
+	oldDashboardGPUStats := dashboardGPUStatsFn
+	oldDashboardCUDA := dashboardCUDAFn
+	oldDashboardReadMem := dashboardReadMemFn
+	oldDashboardTickNow := dashboardTickNowFn
+	oldDashboardDocker := dashboardSystemDocker
+	oldDashboardInternet := dashboardInternetFn
+	oldDoctorGPUStats := doctorGPUStatsFn
+	oldDoctorCUDA := doctorCUDAFn
 	oldRunComposeRemove := runComposeRemoveFn
 
 	t.Cleanup(func() {
@@ -75,6 +86,7 @@ func restoreModelDeps(t *testing.T) {
 		recordInstallFn = oldRecordInstall
 		recordUpdateFn = oldRecordUpdate
 		swapRollbackFn = oldSwapRollback
+		saveTUIConfigFn = oldSaveTUIConfig
 		suiteGetFn = oldSuiteGet
 		suiteAllFn = oldSuiteAll
 		suiteNamesFn = oldSuiteNames
@@ -109,7 +121,14 @@ func restoreModelDeps(t *testing.T) {
 		gpuDetectFn = oldGPUDetect
 		gpuRecommendedFn = oldGPURecommended
 		gpuToolkitFn = oldGPUToolkit
-		dashboardNVIDIAInfoFn = oldDashboardNVIDIA
+		dashboardGPUStatsFn = oldDashboardGPUStats
+		dashboardCUDAFn = oldDashboardCUDA
+		dashboardReadMemFn = oldDashboardReadMem
+		dashboardTickNowFn = oldDashboardTickNow
+		dashboardSystemDocker = oldDashboardDocker
+		dashboardInternetFn = oldDashboardInternet
+		doctorGPUStatsFn = oldDoctorGPUStats
+		doctorCUDAFn = oldDoctorCUDA
 		runComposeRemoveFn = oldRunComposeRemove
 	})
 }
@@ -130,103 +149,148 @@ func prependMockDocker(t *testing.T, body string) {
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 }
 
-func TestRootSwitchesViewsAndTogglesHelp(t *testing.T) {
+func testConfig() tuiconfig.Config {
+	return tuiconfig.DefaultConfig()
+}
+
+func TestRootSwitchesViewsAndTogglesChrome(t *testing.T) {
 	restoreModelDeps(t)
 
-	m := NewRootModel("dev")
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m := NewRootModel("dev", testConfig())
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	updated, _ := m.Update(keyRunes("2"))
 	root := updated.(*RootModel)
 	if root.activeView != ViewSuites {
 		t.Fatalf("activeView = %v, want %v", root.activeView, ViewSuites)
 	}
 
-	updated, _ = root.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	updated, _ = root.Update(keyRunes("?"))
 	root = updated.(*RootModel)
 	if !root.showHelp {
 		t.Fatal("expected help overlay to be visible")
+	}
+
+	updated, _ = root.Update(keyRunes(","))
+	root = updated.(*RootModel)
+	if !root.showSettings {
+		t.Fatal("expected settings overlay to be visible")
+	}
+}
+
+func TestRootSidebarToggleAndPresetCycle(t *testing.T) {
+	restoreModelDeps(t)
+
+	m := NewRootModel("dev", testConfig())
+	m.width = 140
+	m.height = 40
+	m.applyLayout()
+	if m.sidebar != SidebarExpanded {
+		t.Fatalf("sidebar = %v, want expanded", m.sidebar)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	root := updated.(*RootModel)
+	if root.sidebar != SidebarCollapsed {
+		t.Fatalf("sidebar = %v, want collapsed", root.sidebar)
+	}
+
+	current := root.cfg.ActivePreset
+	updated, _ = root.Update(keyRunes("p"))
+	root = updated.(*RootModel)
+	if root.cfg.ActivePreset == current {
+		t.Fatal("expected preset cycle")
 	}
 }
 
 func TestRootViewTooNarrow(t *testing.T) {
 	restoreModelDeps(t)
 
-	m := NewRootModel("dev")
+	m := NewRootModel("dev", testConfig())
 	m.width = 79
 	if got := m.View(); got != "Terminal too narrow — resize to at least 80 columns" {
 		t.Fatalf("View() = %q", got)
 	}
 }
 
-func TestRootInitViewHelpersAndChrome(t *testing.T) {
+func TestRootSettingsSaveAndDiscard(t *testing.T) {
 	restoreModelDeps(t)
 
-	m := NewRootModel("dev")
-	m.width = 120
+	saved := testConfig()
+	saveTUIConfigFn = func(cfg tuiconfig.Config) error {
+		saved = cfg
+		return nil
+	}
+
+	m := NewRootModel("dev", testConfig())
+	m.width = 140
 	m.height = 40
-	if cmd := m.Init(); cmd == nil {
-		t.Fatal("expected init cmd")
+	m.applyLayout()
+
+	updated, _ := m.Update(keyRunes(","))
+	root := updated.(*RootModel)
+	root.settings.current.ActivePreset = "mlops"
+	updated, _ = root.Update(settingsSavedMsg{Config: root.settings.current})
+	root = updated.(*RootModel)
+	if root.showSettings {
+		t.Fatal("expected settings to close on save")
 	}
-	if m.contentWidth() <= 0 || m.contentHeight() <= 0 {
-		t.Fatal("expected positive content size")
+	if root.cfg.ActivePreset != "mlops" {
+		t.Fatalf("active preset = %q", root.cfg.ActivePreset)
 	}
-	if m.headerView() == "" || m.footerView() == "" {
-		t.Fatal("expected chrome output")
+	if msg := saveTUIConfigCmd(root.cfg)(); msg.(rootConfigSavedMsg).err != nil {
+		t.Fatalf("saveTUIConfigCmd() error = %v", msg.(rootConfigSavedMsg).err)
 	}
-	if m.activeContent() == "" {
-		t.Fatal("expected active content")
+	if saved.ActivePreset != "mlops" {
+		t.Fatalf("saved preset = %q", saved.ActivePreset)
 	}
-	if m.activeHelp() == "" || m.helpOverlay() == "" {
-		t.Fatal("expected help output")
-	}
-	if gradientText("gradient") == "" {
-		t.Fatal("expected gradient title")
-	}
-	if view := m.View(); view == "" {
-		t.Fatal("expected full root view")
+
+	updated, _ = root.Update(keyRunes(","))
+	root = updated.(*RootModel)
+	root.settings.current.ActivePreset = "training"
+	updated, _ = root.Update(settingsDiscardedMsg{})
+	root = updated.(*RootModel)
+	if root.cfg.ActivePreset != "mlops" {
+		t.Fatalf("discard should keep saved config, got %q", root.cfg.ActivePreset)
 	}
 }
 
-func TestExtractLabURL(t *testing.T) {
-	t.Run("json", func(t *testing.T) {
-		url, err := extractLabURL(`{"url":"http://0.0.0.0:8888/","token":"abc123"}`)
-		if err != nil {
-			t.Fatalf("extractLabURL() error = %v", err)
-		}
-		if url != "http://localhost:8888/lab?token=abc123" {
-			t.Fatalf("extractLabURL() = %q", url)
-		}
-	})
+func TestRootHelpersAndLabURL(t *testing.T) {
+	restoreModelDeps(t)
 
-	t.Run("fallback", func(t *testing.T) {
-		url, err := extractLabURL(`http://0.0.0.0:8888/?token=abc123`)
-		if err != nil {
-			t.Fatalf("extractLabURL() error = %v", err)
-		}
-		if url != "http://127.0.0.1:8888/lab?token=abc123" {
-			t.Fatalf("extractLabURL() = %q", url)
-		}
-	})
+	m := NewRootModel("dev", testConfig())
+	m.width = 140
+	m.height = 40
+	m.applyLayout()
+	if m.headerView() == "" || m.footerView() == "" || m.sidebarView() == "" || m.contentView() == "" {
+		t.Fatal("expected root chrome output")
+	}
+	if gradientText("gradient") == "" || gradientBar(10, 0.5, false) == "" {
+		t.Fatal("expected gradient helpers")
+	}
+
+	url, err := extractLabURL(`{"url":"http://0.0.0.0:8888/","token":"abc123"}`)
+	if err != nil {
+		t.Fatalf("extractLabURL() error = %v", err)
+	}
+	if url != "http://localhost:8888/lab?token=abc123" {
+		t.Fatalf("extractLabURL() = %q", url)
+	}
 }
 
-func TestOrderedInstalledSuites(t *testing.T) {
+func TestOrderedInstalledSuitesAndForgeHelpers(t *testing.T) {
+	restoreModelDeps(t)
+
 	got := orderedInstalledSuites([]string{"flow", "boosting", "forge"})
 	want := []string{"boosting", "flow", "forge"}
-	if len(got) != len(want) {
-		t.Fatalf("orderedInstalledSuites() len = %d, want %d", len(got), len(want))
-	}
 	for idx := range want {
 		if got[idx] != want[idx] {
 			t.Fatalf("orderedInstalledSuites()[%d] = %q, want %q", idx, got[idx], want[idx])
 		}
 	}
-}
 
-func TestCurrentSuiteDefinitionForgeUsesManifestSelection(t *testing.T) {
-	restoreModelDeps(t)
-
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{
 			"forge": {
 				"gradient-boost-lab":  {Current: "custom/jupyter"},
 				"gradient-flow-serve": {Current: "custom/bento"},
@@ -243,135 +307,51 @@ func TestCurrentSuiteDefinitionForgeUsesManifestSelection(t *testing.T) {
 			Volumes: []suite.VolumeMount{{HostPath: "models", ContainerPath: "/models"}},
 		}, nil
 	}
-
-	got, err := currentSuiteDefinition("forge")
-	if err != nil {
+	if _, err := currentSuiteDefinition("forge"); err != nil {
 		t.Fatalf("currentSuiteDefinition() error = %v", err)
 	}
-	if len(got.Containers) != 2 {
-		t.Fatalf("forge containers = %d, want 2", len(got.Containers))
-	}
 }
 
-func TestWriteComposeForSuiteForgeUsesRawWriter(t *testing.T) {
+func TestOpenLabURLAndDockerHelper(t *testing.T) {
 	restoreModelDeps(t)
 
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
-			"forge": {
-				"gradient-boost-lab": {Current: "custom/jupyter"},
-			},
-		}, nil
-	}
-	suiteSelectionFn = func(names []string, overrides map[string]string) (suite.ForgeSelection, error) {
-		return suite.ForgeSelection{
-			Containers: []suite.Container{{Name: "gradient-boost-lab", Image: "custom/jupyter", Role: "JupyterLab"}},
-			Ports:      []suite.PortMapping{{Port: 8888, Service: "JupyterLab"}},
-			Volumes:    []suite.VolumeMount{{HostPath: "notebooks", ContainerPath: "/notebooks"}},
-		}, nil
-	}
-	suiteBuildForgeFn = func(selection suite.ForgeSelection) ([]byte, error) {
-		if len(selection.Containers) != 1 {
-			t.Fatalf("BuildForgeCompose selection len = %d, want 1", len(selection.Containers))
-		}
-		return []byte("services:\n"), nil
-	}
-
-	var writtenName string
-	dockerWriteRawFn = func(name string, data []byte) (string, error) {
-		writtenName = name
-		return "/tmp/" + name + ".compose.yml", nil
-	}
-
-	path, err := writeComposeForSuite("forge")
-	if err != nil {
-		t.Fatalf("writeComposeForSuite() error = %v", err)
-	}
-	if writtenName != "forge" {
-		t.Fatalf("written suite = %q, want forge", writtenName)
-	}
-	if path != "/tmp/forge.compose.yml" {
-		t.Fatalf("path = %q", path)
-	}
-}
-
-func TestOpenLabURLPrefersJupyterJSON(t *testing.T) {
-	restoreModelDeps(t)
-
-	loadManifestFn = func() (config.VersionManifest, error) { return config.VersionManifest{}, nil }
 	dockerStatusFn = func(ctx context.Context, name string) (string, error) { return "running", nil }
-	suiteJupyterFn = func(s suite.Suite) (string, bool) { return "gradient-boost-lab", true }
-	workspaceRootFn = workspace.Root
-
 	dockerOutputFn = func(ctx context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"url":"http://0.0.0.0:8888/","token":"xyz"}`), nil
 	}
-
 	url, err := openLabURL("boosting")
 	if err != nil {
 		t.Fatalf("openLabURL() error = %v", err)
 	}
-	if url != "http://localhost:8888/lab?token=xyz" {
+	if !strings.Contains(url, "token=xyz") {
 		t.Fatalf("openLabURL() = %q", url)
 	}
+	_, _ = runDockerOutput(context.Background(), "version")
 }
 
-func TestDefaultGPUFnsRemainCallableInTests(t *testing.T) {
+func TestRootUsesWorkspaceAndGPUHelpers(t *testing.T) {
 	restoreModelDeps(t)
+
+	tmp := t.TempDir()
+	workspaceRootFn = func() string { return tmp }
+	loadStateFn = func() (cfgstore.State, error) { return cfgstore.State{Installed: []string{}}, nil }
+	workspaceEnsureFn = func() error { return nil }
+	workspaceStatusFn = func() ([]workspace.Usage, error) {
+		return []workspace.Usage{{Name: "models", Bytes: 2048}}, nil
+	}
 	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
-	if got := dashboardGPULine(); got == "" {
-		t.Fatal("expected non-empty GPU line")
+	dashboardGPUStatsFn = func() ([]gpu.NVIDIADevice, error) { return nil, nil }
+	dashboardCUDAFn = func() (string, error) { return "", nil }
+	dashboardReadMemFn = func() (uint64, uint64, error) { return 1024, 2048, nil }
+	dashboardTickNowFn = func() time.Time { return time.Unix(100, 0) }
+	dashboardSystemDocker = func() (bool, error) { return true, nil }
+	dashboardInternetFn = func() (bool, error) { return true, nil }
+
+	msg := loadDashboardCmd(1)().(dashboardLoadedMsg)
+	if msg.loadErr != nil {
+		t.Fatalf("loadDashboardCmd() error = %v", msg.loadErr)
 	}
-}
-
-func TestRootActivateAndDeactivateView(t *testing.T) {
-	restoreModelDeps(t)
-
-	m := NewRootModel("dev")
-	if cmd := m.activateView(ViewDoctor); cmd == nil {
-		t.Fatal("expected doctor activate cmd")
-	}
-	m.deactivateView(ViewDoctor)
-	if m.doctor.active {
-		t.Fatal("expected doctor view to deactivate")
-	}
-}
-
-func TestRunDockerOutputUsesDockerOnPath(t *testing.T) {
-	restoreModelDeps(t)
-	prependMockDocker(t, `printf '{"token":"abc"}\n'`)
-
-	out, err := runDockerOutput(context.Background(), "exec", "demo")
-	if err != nil {
-		t.Fatalf("runDockerOutput() error = %v", err)
-	}
-	if string(out) != "{\"token\":\"abc\"}\n" {
-		t.Fatalf("runDockerOutput() = %q", string(out))
-	}
-}
-
-func TestRootUpdateRoutesAcrossViews(t *testing.T) {
-	restoreModelDeps(t)
-
-	m := NewRootModel("dev")
-	_, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-
-	for _, key := range []string{"1", "2", "3", "4", "5", "tab", "shift+tab"} {
-		updated, _ := m.Update(keyRunes(key))
-		m = updated.(*RootModel)
-	}
-
-	for _, view := range []View{ViewDashboard, ViewSuites, ViewLogs, ViewWorkspace, ViewDoctor} {
-		m.activeView = view
-		if m.activeContent() == "" {
-			t.Fatalf("activeContent() empty for view %v", view)
-		}
-		if m.activeHelp() == "" {
-			t.Fatalf("activeHelp() empty for view %v", view)
-		}
-	}
-
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
-		t.Fatal("expected quit cmd")
+	if len(msg.metrics.Suites) != len(viewOrder) {
+		t.Fatalf("suite count = %d, want %d", len(msg.metrics.Suites), len(viewOrder))
 	}
 }

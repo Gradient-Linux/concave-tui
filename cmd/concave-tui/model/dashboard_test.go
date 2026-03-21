@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/Gradient-Linux/concave-tui/internal/config"
+	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
+	cfgstore "github.com/Gradient-Linux/concave-tui/internal/config"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 )
 
@@ -23,81 +25,77 @@ func TestDashboardViewFirstRun(t *testing.T) {
 func TestDashboardViewDegradedSuiteShowsRecovery(t *testing.T) {
 	m := NewDashboardModel()
 	m.loading = false
-	m.gpuLine = "GPU  not detected · CPU-only mode"
-	m.workspace = "Workspace  ~/gradient/"
-	m.suites = []dashboardSuiteState{
-		{
-			Name:      "neural",
-			Installed: true,
-			Total:     3,
-			Running:   2,
-			Containers: []dashboardContainerState{
-				{Name: "gradient-neural-torch", Status: "running"},
-				{Name: "gradient-neural-lab", Status: "running"},
-				{Name: "gradient-neural-infer", Status: "stopped", Command: "concave start neural"},
+	m.width = 120
+	m.height = 40
+	m.cfg = tuiconfig.DefaultConfig()
+	m.metrics = dashboardMetrics{
+		GPUState: gpu.GPUStateNone,
+		Suites: []dashboardSuiteState{
+			{
+				Name:      "neural",
+				Installed: true,
+				Total:     3,
+				Running:   2,
+				Containers: []dashboardContainerState{
+					{Name: "gradient-neural-torch", Status: "running"},
+					{Name: "gradient-neural-lab", Status: "running"},
+					{Name: "gradient-neural-infer", Status: "stopped"},
+				},
 			},
 		},
 	}
 
 	view := m.View()
-	if !strings.Contains(view, "concave start neural") {
+	if !strings.Contains(view, "gradient-neural-infer") || !strings.Contains(view, "stopped") {
 		t.Fatalf("View() = %q", view)
 	}
 }
 
-func TestDashboardGPULineCPUOnly(t *testing.T) {
-	restoreModelDeps(t)
-	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
-
-	if got := dashboardGPULine(); !strings.Contains(got, "CPU-only mode") {
-		t.Fatalf("dashboardGPULine() = %q", got)
-	}
-}
-
-func TestDashboardGPUVariantsAndHelpers(t *testing.T) {
-	restoreModelDeps(t)
-
-	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNVIDIA, nil }
-	dashboardNVIDIAInfoFn = func() (string, string, error) { return "RTX 4090", "24 GB", nil }
-	gpuRecommendedFn = func() (string, error) { return "570", nil }
-	gpuToolkitFn = func() (bool, error) { return true, nil }
-	if got := dashboardGPULine(); !strings.Contains(got, "RTX 4090") {
-		t.Fatalf("dashboardGPULine() = %q", got)
-	}
-
-	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateAMD, nil }
-	if got := dashboardGPULine(); !strings.Contains(got, "AMD detected") {
-		t.Fatalf("dashboardGPULine() = %q", got)
-	}
-	if dashboardTickCmd(2)() == nil {
-		t.Fatal("expected tick message")
-	}
-}
-
-func TestDashboardActivateUpdateAndHelp(t *testing.T) {
+func TestDashboardPresetMappingAndColumns(t *testing.T) {
 	m := NewDashboardModel()
-	if cmd := m.Activate(); cmd == nil {
-		t.Fatal("expected activate cmd")
+	m.SetConfig(tuiconfig.DefaultConfig())
+	if len(m.widgets()) == 0 {
+		t.Fatal("expected default preset widgets")
 	}
-	m.SetSize(90, 20)
+	if dashboardColumnsForWidth(79) != 1 || dashboardColumnsForWidth(80) != 2 || dashboardColumnsForWidth(159) != 2 || dashboardColumnsForWidth(160) != 3 {
+		t.Fatal("unexpected dashboard column mapping")
+	}
+}
 
-	updated, _ := m.Update(dashboardLoadedMsg{
-		token:     m.loadToken,
-		gpuLine:   "GPU",
-		workspace: "Workspace",
-		suites:    []dashboardSuiteState{{Name: "boosting", Installed: true, Total: 1, Running: 1}},
-	})
-	if updated.HelpView() == "" {
-		t.Fatal("expected help text")
+func TestDashboardHistoryCapsAt60AndBarFallback(t *testing.T) {
+	m := NewDashboardModel()
+	for idx := 0; idx < 70; idx++ {
+		m.appendHistory([]gpu.NVIDIADevice{{Index: 0, Name: "RTX", Utilization: idx % 100}})
+	}
+	if len(m.history) != 1 || len(m.history[0]) != 60 {
+		t.Fatalf("history len = %#v", m.history)
 	}
 
-	updated, _ = updated.Update(keyRunes("r"))
-	if !updated.loading {
-		t.Fatal("expected refresh to set loading")
+	m.loading = false
+	m.width = 100
+	m.height = 30
+	m.metrics = dashboardMetrics{
+		GPUState: gpu.GPUStateNVIDIA,
+		GPUs:     []gpu.NVIDIADevice{{Index: 0, Name: "RTX", Utilization: 67, MemoryUsedMiB: 10, MemoryTotalMiB: 20}},
 	}
-	updated.Deactivate()
-	if updated.active {
-		t.Fatal("expected deactivate to clear active flag")
+	if got := m.renderGPUWidget(0, 40, 10, "bar"); !strings.Contains(got, "67%") {
+		t.Fatalf("renderGPUWidget() = %q", got)
+	}
+}
+
+func TestDashboardVRAMThresholdColorAndCPUOnly(t *testing.T) {
+	m := NewDashboardModel()
+	m.metrics = dashboardMetrics{
+		GPUState: gpu.GPUStateNVIDIA,
+		GPUs:     []gpu.NVIDIADevice{{Name: "RTX", Utilization: 90, MemoryUsedMiB: 96, MemoryTotalMiB: 100}},
+	}
+	if got := m.renderVRAMWidget(50); !strings.Contains(got, "96%") {
+		t.Fatalf("renderVRAMWidget() = %q", got)
+	}
+
+	m.metrics.GPUState = gpu.GPUStateNone
+	if got := m.renderGPUWidget(0, 40, 10, "bar"); !strings.Contains(got, "CPU-only mode") {
+		t.Fatalf("renderGPUWidget() = %q", got)
 	}
 }
 
@@ -105,11 +103,14 @@ func TestLoadDashboardCmdBuildsInstalledSuiteState(t *testing.T) {
 	restoreModelDeps(t)
 
 	tmp := t.TempDir()
-	loadStateFn = func() (config.State, error) {
-		return config.State{Installed: []string{"boosting"}}, nil
+	loadStateFn = func() (cfgstore.State, error) {
+		return cfgstore.State{Installed: []string{"boosting"}}, nil
 	}
 	workspaceRootFn = func() string { return tmp }
 	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
+	dashboardReadMemFn = func() (uint64, uint64, error) { return 1024, 2048, nil }
+	dashboardSystemDocker = func() (bool, error) { return true, nil }
+	dashboardInternetFn = func() (bool, error) { return true, nil }
 	dockerStatusFn = func(ctx context.Context, name string) (string, error) {
 		switch name {
 		case "gradient-boost-track":
@@ -118,15 +119,30 @@ func TestLoadDashboardCmdBuildsInstalledSuiteState(t *testing.T) {
 			return "running", nil
 		}
 	}
+	dashboardTickNowFn = func() time.Time { return time.Unix(100, 0) }
 
 	msg := loadDashboardCmd(3)().(dashboardLoadedMsg)
 	if msg.loadErr != nil {
 		t.Fatalf("loadDashboardCmd() error = %v", msg.loadErr)
 	}
-	if len(msg.suites) != len(viewOrder) {
-		t.Fatalf("suite count = %d, want %d", len(msg.suites), len(viewOrder))
+	if len(msg.metrics.Suites) != len(viewOrder) {
+		t.Fatalf("suite count = %d, want %d", len(msg.metrics.Suites), len(viewOrder))
 	}
-	if msg.suites[0].Name != "boosting" || msg.suites[0].Running != 2 {
-		t.Fatalf("boosting state = %#v", msg.suites[0])
+	if msg.metrics.Suites[0].Name != "boosting" || msg.metrics.Suites[0].Running != 2 {
+		t.Fatalf("boosting state = %#v", msg.metrics.Suites[0])
+	}
+}
+
+func TestDashboardTickAndHelpers(t *testing.T) {
+	m := NewDashboardModel()
+	m.SetConfig(tuiconfig.DefaultConfig())
+	if dashboardTickCmd(2, time.Second)() == nil {
+		t.Fatal("expected tick message")
+	}
+	if m.HelpView() == "" {
+		t.Fatal("expected help text")
+	}
+	if humanBytes(1024) == "" {
+		t.Fatal("expected dashboard helpers")
 	}
 }

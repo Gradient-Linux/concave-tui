@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
 	"github.com/Gradient-Linux/concave-tui/cmd/concave-tui/model"
 	"github.com/Gradient-Linux/concave-tui/internal/system"
-	"github.com/Gradient-Linux/concave-tui/internal/workspace"
 )
 
 // Version is injected at build time.
@@ -19,10 +19,10 @@ var Version = "dev"
 var (
 	terminalSupportedFn = terminalSupported
 	dockerRunningFn     = system.DockerRunning
-	ensureWorkspaceFn   = workspace.EnsureLayout
+	loadConfigFn        = tuiconfig.Load
 	exitProgram         = os.Exit
 	runProgramFn        = func(root tea.Model) error {
-		program := tea.NewProgram(root, tea.WithAltScreen())
+		program := tea.NewProgram(root, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		_, err := program.Run()
 		return err
 	}
@@ -75,12 +75,13 @@ func run(args []string) int {
 		}
 		return 1
 	}
-	if err := ensureWorkspaceFn(); err != nil {
+	cfg, err := loadConfigFn()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
 	}
 
-	root := model.NewRootModel(Version)
+	root := model.NewRootModel(Version, cfg)
 	if err := runProgramFn(root); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1

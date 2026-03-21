@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Gradient-Linux/concave-tui/internal/config"
+	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
+	cfgstore "github.com/Gradient-Linux/concave-tui/internal/config"
 	"github.com/Gradient-Linux/concave-tui/internal/docker"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 	"github.com/Gradient-Linux/concave-tui/internal/suite"
@@ -34,16 +37,17 @@ const (
 )
 
 var (
-	loadStateFn          = config.LoadState
-	saveStateFn          = config.SaveState
-	addSuiteFn           = config.AddSuite
-	removeSuiteFn        = config.RemoveSuite
-	isInstalledFn        = config.IsInstalled
-	loadManifestFn       = config.LoadManifest
-	saveManifestFn       = config.SaveManifest
-	recordInstallFn      = config.RecordInstall
-	recordUpdateFn       = config.RecordUpdate
-	swapRollbackFn       = config.SwapForRollback
+	loadStateFn          = cfgstore.LoadState
+	saveStateFn          = cfgstore.SaveState
+	addSuiteFn           = cfgstore.AddSuite
+	removeSuiteFn        = cfgstore.RemoveSuite
+	isInstalledFn        = cfgstore.IsInstalled
+	loadManifestFn       = cfgstore.LoadManifest
+	saveManifestFn       = cfgstore.SaveManifest
+	recordInstallFn      = cfgstore.RecordInstall
+	recordUpdateFn       = cfgstore.RecordUpdate
+	swapRollbackFn       = cfgstore.SwapForRollback
+	saveTUIConfigFn      = tuiconfig.Save
 	suiteGetFn           = suite.Get
 	suiteAllFn           = suite.All
 	suiteNamesFn         = suite.Names
@@ -92,18 +96,33 @@ const (
 	ViewDoctor
 )
 
+type SidebarState int
+
+const (
+	SidebarExpanded SidebarState = iota
+	SidebarCollapsed
+)
+
+type rootConfigSavedMsg struct {
+	err error
+}
+
 type RootModel struct {
-	activeView View
-	dashboard  DashboardModel
-	suites     SuitesModel
-	logs       LogsModel
-	workspace  WorkspaceModel
-	doctor     DoctorModel
-	width      int
-	height     int
-	showHelp   bool
-	err        error
-	version    string
+	activeView   View
+	sidebar      SidebarState
+	dashboard    DashboardModel
+	suites       SuitesModel
+	logs         LogsModel
+	workspace    WorkspaceModel
+	doctor       DoctorModel
+	settings     SettingsModel
+	width        int
+	height       int
+	showHelp     bool
+	showSettings bool
+	err          error
+	version      string
+	cfg          tuiconfig.Config
 }
 
 func init() {
@@ -125,16 +144,25 @@ func init() {
 	})
 }
 
-func NewRootModel(version string) *RootModel {
-	return &RootModel{
+func NewRootModel(version string, cfgs ...tuiconfig.Config) *RootModel {
+	cfg := tuiconfig.DefaultConfig()
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
+	m := &RootModel{
 		activeView: ViewDashboard,
+		sidebar:    sidebarStateFromConfig(cfg),
 		dashboard:  NewDashboardModel(),
 		suites:     NewSuitesModel(),
 		logs:       NewLogsModel(),
 		workspace:  NewWorkspaceModel(),
 		doctor:     NewDoctorModel(),
+		settings:   NewSettingsModel(cfg),
 		version:    version,
+		cfg:        cfg,
 	}
+	m.applyConfig(cfg)
+	return m
 }
 
 func (m *RootModel) Init() tea.Cmd {
@@ -146,38 +174,38 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.dashboard.SetSize(m.contentWidth(), m.contentHeight())
-		m.suites.SetSize(m.contentWidth(), m.contentHeight())
-		m.logs.SetSize(m.contentWidth(), m.contentHeight())
-		m.workspace.SetSize(m.contentWidth(), m.contentHeight())
-		m.doctor.SetSize(m.contentWidth(), m.contentHeight())
+		m.applyLayout()
 		return m, nil
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "?":
-			m.showHelp = !m.showHelp
-			return m, nil
-		case "1":
-			return m.switchView(ViewDashboard)
-		case "2":
-			return m.switchView(ViewSuites)
-		case "3":
-			return m.switchView(ViewLogs)
-		case "4":
-			return m.switchView(ViewWorkspace)
-		case "5":
-			return m.switchView(ViewDoctor)
-		case "tab":
-			return m.switchView((m.activeView + 1) % 5)
-		case "shift+tab":
-			next := m.activeView - 1
-			if next < 0 {
-				next = ViewDoctor
-			}
-			return m.switchView(next)
+	case rootConfigSavedMsg:
+		if msg.err != nil {
+			m.err = msg.err
 		}
+		return m, nil
+	case settingsSavedMsg:
+		m.cfg = msg.Config
+		m.showSettings = false
+		m.settings.SetConfig(m.cfg)
+		m.dashboard.SetConfig(m.cfg)
+		m.applyLayout()
+		return m, saveTUIConfigCmd(m.cfg)
+	case settingsDiscardedMsg:
+		m.showSettings = false
+		m.settings.SetConfig(m.cfg)
+		m.dashboard.SetConfig(m.cfg)
+		return m, nil
+	}
+
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if handled, cmd := m.handleGlobalKeys(keyMsg); handled {
+			return m, cmd
+		}
+	}
+
+	if m.showSettings {
+		var cmd tea.Cmd
+		m.settings, cmd = m.settings.Update(msg)
+		m.dashboard.SetConfig(m.settings.Current())
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
@@ -201,30 +229,88 @@ func (m *RootModel) View() string {
 		return "Terminal too narrow — resize to at least 80 columns"
 	}
 
-	content := m.activeContent()
+	innerWidth := max(78, m.width-2)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), m.contentView())
 	if m.showHelp {
-		content = lipgloss.JoinVertical(lipgloss.Left, content, "", m.helpOverlay())
+		body = lipgloss.JoinVertical(lipgloss.Left, body, "", centeredOverlay(innerWidth, m.helpOverlay()))
+	}
+	if m.showSettings {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, "", centeredOverlay(innerWidth, m.settings.View()))
+	}
+	if m.err != nil {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, "", errorText(m.err.Error()))
 	}
 
-	bodyStyle := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(ColorMid)).
-		Padding(0, 1)
-
-	return bodyStyle.Render(strings.Join([]string{
-		m.headerView(),
-		content,
-		m.footerView(),
-	}, "\n"))
+		BorderForeground(lipgloss.Color(ColorDeep)).
+		Render(strings.Join([]string{
+			m.headerView(),
+			body,
+			m.footerView(),
+		}, "\n"))
 }
 
-func (m *RootModel) switchView(next View) (tea.Model, tea.Cmd) {
+func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return true, tea.Quit
+	case "?", "f1":
+		m.showHelp = !m.showHelp
+		return true, nil
+	case ",":
+		m.showSettings = true
+		m.showHelp = false
+		m.settings.SetConfig(m.cfg)
+		m.dashboard.SetConfig(m.settings.Current())
+		m.applyLayout()
+		return true, nil
+	case "1":
+		return true, m.switchView(ViewDashboard)
+	case "2":
+		return true, m.switchView(ViewSuites)
+	case "3":
+		return true, m.switchView(ViewLogs)
+	case "4":
+		return true, m.switchView(ViewWorkspace)
+	case "5":
+		return true, m.switchView(ViewDoctor)
+	case "tab":
+		return true, m.switchView((m.activeView + 1) % 5)
+	case "shift+tab":
+		next := m.activeView - 1
+		if next < 0 {
+			next = ViewDoctor
+		}
+		return true, m.switchView(next)
+	case "p":
+		m.cfg.ActivePreset = nextPresetName(m.cfg)
+		m.dashboard.SetConfig(m.cfg)
+		return true, nil
+	case "ctrl+b":
+		m.toggleSidebar()
+		return true, nil
+	case "b":
+		if m.activeView != ViewSuites && m.activeView != ViewWorkspace {
+			m.toggleSidebar()
+			return true, nil
+		}
+	case "esc":
+		if m.showHelp {
+			m.showHelp = false
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *RootModel) switchView(next View) tea.Cmd {
 	if next == m.activeView {
-		return m, nil
+		return nil
 	}
 	m.deactivateView(m.activeView)
 	m.activeView = next
-	return m, m.activateView(next)
+	return m.activateView(next)
 }
 
 func (m *RootModel) deactivateView(view View) {
@@ -257,6 +343,97 @@ func (m *RootModel) activateView(view View) tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+func (m *RootModel) applyConfig(cfg tuiconfig.Config) {
+	m.cfg = cfg
+	m.sidebar = sidebarStateFromConfig(cfg)
+	m.settings.SetConfig(cfg)
+	m.dashboard.SetConfig(cfg)
+}
+
+func (m *RootModel) applyLayout() {
+	contentWidth := m.contentWidth()
+	contentHeight := m.contentHeight()
+	m.dashboard.SetSize(contentWidth, contentHeight)
+	m.suites.SetSize(contentWidth, contentHeight)
+	m.logs.SetSize(contentWidth, contentHeight)
+	m.workspace.SetSize(contentWidth, contentHeight)
+	m.doctor.SetSize(contentWidth, contentHeight)
+	m.settings.SetSize(max(56, min(contentWidth, 78)), max(18, min(contentHeight, 22)))
+}
+
+func (m *RootModel) toggleSidebar() {
+	if m.sidebar == SidebarExpanded {
+		m.sidebar = SidebarCollapsed
+	} else {
+		m.sidebar = SidebarExpanded
+	}
+	m.applyLayout()
+}
+
+func (m *RootModel) sidebarWidth() int {
+	if m.sidebar == SidebarCollapsed {
+		return 4
+	}
+	return 22
+}
+
+func (m *RootModel) contentWidth() int {
+	width := m.width - m.sidebarWidth() - 7
+	if width < minWidth-10 {
+		return minWidth - 10
+	}
+	return width
+}
+
+func (m *RootModel) contentHeight() int {
+	height := m.height - 8
+	if height < 16 {
+		return 16
+	}
+	return height
+}
+
+func (m *RootModel) contentView() string {
+	style := lipgloss.NewStyle().
+		Width(m.contentWidth()).
+		Height(m.contentHeight()).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color(ColorDeep)).
+		Padding(0, 1)
+	return style.Render(m.activeContent())
+}
+
+func (m *RootModel) sidebarView() string {
+	lines := make([]string, 0, 7)
+	if m.sidebar == SidebarExpanded {
+		lines = append(lines, gradientText("gradient"), "")
+	}
+	for _, view := range []View{ViewDashboard, ViewSuites, ViewLogs, ViewWorkspace, ViewDoctor} {
+		active := view == m.activeView
+		icon := sidebarIcon(view)
+		label := sidebarLabel(view)
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
+		if active {
+			style = style.Foreground(lipgloss.Color(ColorGold)).Bold(true).Background(lipgloss.Color(ColorDeep))
+		}
+		if m.sidebar == SidebarCollapsed {
+			lines = append(lines, style.Width(2).Render(icon))
+			continue
+		}
+		lines = append(lines, style.Width(m.sidebarWidth() - 4).Render(" "+icon+"  "+label))
+	}
+	if m.sidebar == SidebarExpanded {
+		lines = append(lines, "", mutedText(" Settings"))
+	}
+	return lipgloss.NewStyle().
+		Width(m.sidebarWidth()).
+		Height(m.contentHeight()).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color(ColorDeep)).
+		Padding(0, 1).
+		Render(strings.Join(lines, "\n"))
 }
 
 func (m *RootModel) activeContent() string {
@@ -303,59 +480,172 @@ func (m *RootModel) activeHelp() string {
 }
 
 func (m *RootModel) headerView() string {
-	title := gradientText("gradient")
-	tabStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
-	activeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
-	tabs := []string{
-		"1 Dashboard",
-		"2 Suites",
-		"3 Logs",
-		"4 Workspace",
-		"5 Doctor",
-	}
-	for idx, tab := range tabs {
-		if View(idx) == m.activeView {
-			tabs[idx] = activeStyle.Render(tab)
-		} else {
-			tabs[idx] = tabStyle.Render(tab)
-		}
-	}
-	return lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render("── "+strings.Join(tabs, " · ")+" ──"),
+	wordmark := gradientText("gradient linux")
+	version := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render("concave-tui " + m.version)
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		lipgloss.NewStyle().Width(max(24, m.width-28)).Render(wordmark),
+		version,
 	)
 }
 
 func (m *RootModel) footerView() string {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ColorMuted)).
-		Render("tab next · shift+tab prev · ? help · q quit")
+		Render("tab next · shift+tab prev · b sidebar · , settings · p presets · F1 help · q quit")
+}
+
+func saveTUIConfigCmd(cfg tuiconfig.Config) tea.Cmd {
+	return func() tea.Msg {
+		return rootConfigSavedMsg{err: saveTUIConfigFn(cfg)}
+	}
+}
+
+func sidebarStateFromConfig(cfg tuiconfig.Config) SidebarState {
+	if strings.EqualFold(cfg.Display.SidebarDefault, "collapsed") {
+		return SidebarCollapsed
+	}
+	return SidebarExpanded
+}
+
+func nextPresetName(cfg tuiconfig.Config) string {
+	names := cfg.PresetNames()
+	if len(names) == 0 {
+		return "default"
+	}
+	current := cfg.ActivePreset
+	for idx, name := range names {
+		if name == current {
+			return names[(idx+1)%len(names)]
+		}
+	}
+	return names[0]
+}
+
+func sidebarIcon(view View) string {
+	switch view {
+	case ViewDashboard:
+		return "󰕮"
+	case ViewSuites:
+		return "󰣘"
+	case ViewLogs:
+		return "󰈙"
+	case ViewWorkspace:
+		return "󰉋"
+	case ViewDoctor:
+		return "󰓙"
+	default:
+		return "•"
+	}
+}
+
+func sidebarLabel(view View) string {
+	switch view {
+	case ViewDashboard:
+		return "Dashboard"
+	case ViewSuites:
+		return "Suites"
+	case ViewLogs:
+		return "Logs"
+	case ViewWorkspace:
+		return "Workspace"
+	case ViewDoctor:
+		return "Doctor"
+	default:
+		return ""
+	}
+}
+
+func centeredOverlay(width int, body string) string {
+	return lipgloss.PlaceHorizontal(max(40, width), lipgloss.Center, body)
 }
 
 func gradientText(text string) string {
-	colors := []string{ColorDeep, ColorMid, ColorGold}
-	var parts []string
-	for idx, r := range text {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(runes))
+	for idx, r := range runes {
+		color := interpolateHex(ColorDeep, ColorGold, ratio(idx, len(runes)))
 		parts = append(parts, lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colors[idx%len(colors)])).
+			Foreground(lipgloss.Color(color)).
 			Bold(true).
 			Render(string(r)))
 	}
 	return strings.Join(parts, "")
 }
 
-func (m *RootModel) contentWidth() int {
-	if m.width <= 0 {
-		return 80
+func gradientBar(width int, fillRatio float64, styleThreshold bool) string {
+	if width <= 0 {
+		return ""
 	}
-	return m.width - 4
+	if fillRatio < 0 {
+		fillRatio = 0
+	}
+	if fillRatio > 1 {
+		fillRatio = 1
+	}
+	filled := int(math.Round(fillRatio * float64(width)))
+	if filled > width {
+		filled = width
+	}
+	var parts []string
+	for idx := 0; idx < filled; idx++ {
+		color := interpolateHex(ColorDeep, ColorGold, ratio(idx, max(1, filled)))
+		if styleThreshold {
+			switch {
+			case fillRatio >= 0.95:
+				color = ColorError
+			case fillRatio >= 0.80:
+				color = ColorWarn
+			}
+		}
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("█"))
+	}
+	if width-filled > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render(strings.Repeat("░", width-filled)))
+	}
+	return strings.Join(parts, "")
 }
 
-func (m *RootModel) contentHeight() int {
-	if m.height <= 0 {
-		return 24
+func interpolateHex(startHex, endHex string, amount float64) string {
+	sr, sg, sb := hexColor(startHex)
+	er, eg, eb := hexColor(endHex)
+	return fmt.Sprintf(
+		"#%02x%02x%02x",
+		int(clamp(float64(sr)+(float64(er-sr)*amount), 0, 255)),
+		int(clamp(float64(sg)+(float64(eg-sg)*amount), 0, 255)),
+		int(clamp(float64(sb)+(float64(eb-sb)*amount), 0, 255)),
+	)
+}
+
+func hexColor(value string) (int, int, int) {
+	value = strings.TrimPrefix(value, "#")
+	if len(value) != 6 {
+		return 0, 0, 0
 	}
-	return m.height - 8
+	r, _ := strconv.ParseInt(value[0:2], 16, 64)
+	g, _ := strconv.ParseInt(value[2:4], 16, 64)
+	b, _ := strconv.ParseInt(value[4:6], 16, 64)
+	return int(r), int(g), int(b)
+}
+
+func ratio(idx, count int) float64 {
+	if count <= 1 {
+		return 0
+	}
+	return float64(idx) / float64(count-1)
+}
+
+func clamp(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func orderedInstalledSuites(installed []string) []string {
@@ -428,7 +718,7 @@ func writeComposeForSuite(name string) (string, error) {
 	return dockerWriteRawFn(name, data)
 }
 
-func currentImageForFirstContainer(name string, manifest config.VersionManifest) string {
+func currentImageForFirstContainer(name string, manifest cfgstore.VersionManifest) string {
 	s, err := suiteGetFn(name)
 	if err != nil || len(s.Containers) == 0 {
 		return ""
@@ -496,4 +786,11 @@ func extractLabURL(raw string) (string, error) {
 	match = strings.Replace(match, "localhost", "127.0.0.1", 1)
 	match = strings.Replace(match, "/?token=", "/lab?token=", 1)
 	return match, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

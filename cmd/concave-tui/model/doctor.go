@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,6 +34,11 @@ type DoctorModel struct {
 	checkedAt time.Time
 	checks    []doctorCheck
 }
+
+var (
+	doctorGPUStatsFn = gpu.NVIDIADevices
+	doctorCUDAFn     = gpu.CUDAVersion
+)
 
 func NewDoctorModel() DoctorModel {
 	return DoctorModel{
@@ -110,7 +116,15 @@ func (m DoctorModel) runChecks() tea.Cmd {
 			case err != nil:
 				return doctorCheck{name: "Docker", status: "fail", detail: err.Error()}
 			case ok:
-				return doctorCheck{name: "Docker", status: "pass", detail: "running"}
+				version := "running"
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if out, err := dockerOutputFn(ctx, "version", "--format", "{{.Server.Version}}"); err == nil {
+					if text := strings.TrimSpace(string(out)); text != "" {
+						version = "running (v" + text + ")"
+					}
+				}
+				return doctorCheck{name: "Docker", status: "pass", detail: version}
 			default:
 				return doctorCheck{name: "Docker", status: "fail", detail: "not running"}
 			}
@@ -163,8 +177,14 @@ func doctorGPUCheck() doctorCheck {
 	switch state {
 	case gpu.GPUStateNVIDIA:
 		detail := "NVIDIA detected"
-		if branch, err := gpuRecommendedFn(); err == nil {
+		if devices, err := doctorGPUStatsFn(); err == nil && len(devices) > 0 {
+			device := devices[0]
+			detail = fmt.Sprintf("%s · driver %s", device.Name, device.DriverVersion)
+		} else if branch, err := gpuRecommendedFn(); err == nil {
 			detail = "NVIDIA detected · driver " + branch
+		}
+		if cudaVersion, err := doctorCUDAFn(); err == nil && cudaVersion != "" {
+			detail += " · CUDA " + cudaVersion
 		}
 		if ok, _ := gpuToolkitFn(); ok {
 			detail += " · toolkit configured"
@@ -189,7 +209,12 @@ func doctorWorkspaceCheck() doctorCheck {
 			return doctorCheck{name: "Workspace", status: "warn", detail: "missing " + entry}
 		}
 	}
-	return doctorCheck{name: "Workspace", status: "pass", detail: workspaceRootFn() + " · all subdirs present"}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(workspaceRootFn(), &stat); err != nil {
+		return doctorCheck{name: "Workspace", status: "warn", detail: workspaceRootFn() + " · size unavailable"}
+	}
+	free := stat.Bavail * uint64(stat.Bsize)
+	return doctorCheck{name: "Workspace", status: "pass", detail: workspaceRootFn() + " · all subdirs present · " + humanBytes(free) + " free"}
 }
 
 func doctorSuiteCheck(name string) doctorCheck {

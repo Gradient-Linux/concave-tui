@@ -66,14 +66,15 @@ type SuitesModel struct {
 	active        bool
 	loading       bool
 	selected      int
-	showDetail    bool
 	confirmRemove bool
+	confirmUpdate bool
 	execPrompt    bool
 	execInput     textinput.Model
 	rows          []suiteRow
 	lastErr       error
 	note          string
 	opLines       []string
+	updatePreview []string
 	opCh          <-chan suiteOperationMsg
 }
 
@@ -167,28 +168,40 @@ func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
 		return m, loadSuitesCmd()
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "up":
+		case "up", "k":
 			if m.selected > 0 {
 				m.selected--
 			}
-		case "down":
+		case "down", "j":
 			if m.selected < len(m.rows)-1 {
 				m.selected++
 			}
-		case "enter":
-			m.showDetail = !m.showDetail
+		case "g":
+			m.selected = 0
+		case "G":
+			if len(m.rows) > 0 {
+				m.selected = len(m.rows) - 1
+			}
 		case "esc", "n":
 			m.confirmRemove = false
+			m.confirmUpdate = false
 			m.note = ""
 		case "y":
 			if m.confirmRemove {
 				m.confirmRemove = false
 				return m, m.startOperation("remove")
 			}
+			if m.confirmUpdate {
+				m.confirmUpdate = false
+				return m, m.startOperation("update")
+			}
 		case "i":
 			return m, m.startOperation("install")
 		case "u":
-			return m, m.startOperation("update")
+			if m.currentRow().Installed {
+				m.confirmUpdate = true
+				m.updatePreview = m.updateDiffLines(m.currentRow())
+			}
 		case "R":
 			return m, m.startOperation("rollback")
 		case "s":
@@ -222,7 +235,9 @@ func (m SuitesModel) View() string {
 		return errorText(m.lastErr.Error())
 	}
 
-	lines := make([]string, 0, len(m.rows)+10)
+	leftWidth := max(24, (m.width * 30) / 100)
+	rightWidth := max(36, m.width-leftWidth-3)
+	leftLines := []string{"Suites"}
 	for idx, row := range m.rows {
 		prefix := " "
 		style := lipgloss.NewStyle()
@@ -230,34 +245,36 @@ func (m SuitesModel) View() string {
 			prefix = "►"
 			style = style.Foreground(lipgloss.Color(ColorGold)).Bold(true)
 		}
-		lines = append(lines, style.Render(fmt.Sprintf("%s %-10s %-12s %-24s", prefix, row.Name, row.State, truncate(row.Image, 24))))
-		if idx == m.selected {
-			lines = append(lines, "  [i] install [r] remove [u] update [R] rollback [s] start [x] stop [S] restart")
-			if m.showDetail {
-				lines = append(lines, m.detailView(row)...)
-			}
-			if m.confirmRemove {
-				lines = append(lines, "  Remove "+row.Name+"? Your data in ~/gradient/ will not be touched. y confirm · n cancel")
-			}
-			if len(m.opLines) > 0 {
-				lines = append(lines, "  Progress:")
-				for _, line := range m.opLines {
-					lines = append(lines, "    "+line)
-				}
-			}
-			if m.execPrompt {
-				lines = append(lines, "  "+m.execInput.View())
-			}
+		leftLines = append(leftLines, style.Render(fmt.Sprintf("%s %-10s %-12s", prefix, row.Name, row.State)))
+	}
+	rightLines := m.detailView(m.currentRow())
+	if m.confirmUpdate {
+		rightLines = append(rightLines, "", "Update "+m.currentRow().Name+"?", "")
+		rightLines = append(rightLines, m.updatePreview...)
+		rightLines = append(rightLines, "", "[y] confirm  [n] cancel")
+	}
+	if m.confirmRemove {
+		rightLines = append(rightLines, "", "Remove "+m.currentRow().Name+"? Your data in ~/gradient/ will not be touched.", "y confirm · n cancel")
+	}
+	if len(m.opLines) > 0 {
+		rightLines = append(rightLines, "", "Progress:")
+		for _, line := range m.opLines {
+			rightLines = append(rightLines, "  "+line)
 		}
 	}
-	if m.note != "" {
-		lines = append(lines, "", successText(m.note))
+	if m.execPrompt {
+		rightLines = append(rightLines, "", m.execInput.View())
 	}
-	return strings.Join(lines, "\n")
+	if m.note != "" {
+		rightLines = append(rightLines, "", successText(m.note))
+	}
+	left := lipgloss.NewStyle().Width(leftWidth).Render(strings.Join(leftLines, "\n"))
+	right := lipgloss.NewStyle().Width(rightWidth).Render(strings.Join(rightLines, "\n"))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 }
 
 func (m SuitesModel) HelpView() string {
-	return "Suites\n↑/↓ move · enter details · i install · r remove · u update · R rollback · s/x start stop · b shell · e exec · l lab"
+	return "Suites\nj/k move · i install · r remove · u update · R rollback · s/x start stop · b shell · e exec · l lab"
 }
 
 func (m SuitesModel) currentRow() suiteRow {
@@ -268,29 +285,46 @@ func (m SuitesModel) currentRow() suiteRow {
 }
 
 func (m SuitesModel) detailView(row suiteRow) []string {
-	lines := []string{"  Containers:"}
+	lines := []string{fmt.Sprintf("%s   %s", row.Name, row.State), "", "Container              Status    Image"}
 	for _, container := range row.Detail.Suite.Containers {
 		current := row.Detail.Current[container.Name]
 		previous := row.Detail.Previous[container.Name]
-		versionText := current
-		if previous != "" {
-			versionText += " (prev " + previous + ")"
+		status := "not running"
+		for _, state := range row.Detail.Suite.Containers {
+			if state.Name == container.Name {
+				break
+			}
 		}
-		lines = append(lines, "    "+container.Name+" · "+versionText)
+		lines = append(lines, fmt.Sprintf("%-22s %-9s %s", container.Name, status, truncate(current, 24)))
+		if previous != "" {
+			lines = append(lines, fmt.Sprintf("  Previous %-14s %s", "", previous))
+		}
 	}
 	if len(row.Detail.Suite.Ports) > 0 {
-		lines = append(lines, "  Ports:")
+		lines = append(lines, "", "Ports")
 		for _, mapping := range row.Detail.Suite.Ports {
-			lines = append(lines, fmt.Sprintf("    :%d · %s", mapping.Port, mapping.Service))
+			lines = append(lines, fmt.Sprintf("  :%d · %s", mapping.Port, mapping.Service))
 		}
 	}
 	if len(row.Detail.Suite.Volumes) > 0 {
-		lines = append(lines, "  Volumes:")
+		lines = append(lines, "", "Volumes")
 		for _, mount := range row.Detail.Suite.Volumes {
-			lines = append(lines, fmt.Sprintf("    %s -> %s", mount.HostPath, mount.ContainerPath))
+			lines = append(lines, fmt.Sprintf("  %s -> %s", mount.HostPath, mount.ContainerPath))
 		}
 	}
-	lines = append(lines, "  Actions: s start · x stop · S restart · b shell · e exec · l lab")
+	lines = append(lines, "", "[i]install [r]remove [u]update [R]rollback", "[s]start   [x]stop   [b]shell  [e]exec [l]lab")
+	return lines
+}
+
+func (m SuitesModel) updateDiffLines(row suiteRow) []string {
+	lines := make([]string, 0, len(row.Detail.Suite.Containers))
+	for _, container := range row.Detail.Suite.Containers {
+		current := row.Detail.Current[container.Name]
+		if current == "" {
+			current = container.Image
+		}
+		lines = append(lines, fmt.Sprintf("%-24s %s  →  %s", container.Name, current, container.Image))
+	}
 	return lines
 }
 
@@ -548,6 +582,9 @@ func performRollback(name string, send func(string)) error {
 	manifest, err = swapRollbackFn(manifest, name)
 	if err != nil {
 		return err
+	}
+	for containerName, version := range manifest[name] {
+		send(fmt.Sprintf("restored %s to %s", containerName, version.Current))
 	}
 	if err := saveManifestFn(manifest); err != nil {
 		return err

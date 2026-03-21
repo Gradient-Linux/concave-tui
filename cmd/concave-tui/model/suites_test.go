@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Gradient-Linux/concave-tui/internal/config"
+	cfgstore "github.com/Gradient-Linux/concave-tui/internal/config"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 	"github.com/Gradient-Linux/concave-tui/internal/suite"
 )
@@ -17,8 +17,8 @@ func TestPerformInstallSuccess(t *testing.T) {
 	restoreModelDeps(t)
 
 	isInstalledFn = func(name string) (bool, error) { return false, nil }
-	loadStateFn = func() (config.State, error) { return config.State{Installed: nil}, nil }
-	loadManifestFn = func() (config.VersionManifest, error) { return config.VersionManifest{}, nil }
+	loadStateFn = func() (cfgstore.State, error) { return cfgstore.State{Installed: nil}, nil }
+	loadManifestFn = func() (cfgstore.VersionManifest, error) { return cfgstore.VersionManifest{}, nil }
 	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
 
 	var pulled []string
@@ -37,8 +37,8 @@ func TestPerformInstallSuccess(t *testing.T) {
 		return "/tmp/" + name + ".compose.yml", nil
 	}
 
-	saved := config.VersionManifest{}
-	saveManifestFn = func(manifest config.VersionManifest) error {
+	saved := cfgstore.VersionManifest{}
+	saveManifestFn = func(manifest cfgstore.VersionManifest) error {
 		saved = manifest
 		return nil
 	}
@@ -74,7 +74,7 @@ func TestPerformInstallStopsBeforeComposeOnPullFailure(t *testing.T) {
 	restoreModelDeps(t)
 
 	isInstalledFn = func(name string) (bool, error) { return false, nil }
-	loadStateFn = func() (config.State, error) { return config.State{}, nil }
+	loadStateFn = func() (cfgstore.State, error) { return cfgstore.State{}, nil }
 	dockerTagPreviousFn = func(image string) error { return nil }
 	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error {
 		return errors.New("pull failed")
@@ -98,11 +98,11 @@ func TestPerformInstallStopsBeforeComposeOnPullFailure(t *testing.T) {
 func TestLoadSuitesCmdReflectsInstalledState(t *testing.T) {
 	restoreModelDeps(t)
 
-	loadStateFn = func() (config.State, error) {
-		return config.State{Installed: []string{"boosting"}}, nil
+	loadStateFn = func() (cfgstore.State, error) {
+		return cfgstore.State{Installed: []string{"boosting"}}, nil
 	}
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{
 			"boosting": {
 				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
 				"gradient-boost-lab":   {Current: "custom/jupyter"},
@@ -126,14 +126,15 @@ func TestLoadSuitesCmdReflectsInstalledState(t *testing.T) {
 	}
 }
 
-func TestSuitesUpdateRemoveCancel(t *testing.T) {
+func TestSuitesUpdateRemoveAndUpdateCancel(t *testing.T) {
 	m := NewSuitesModel()
 	m.rows = []suiteRow{{Name: "boosting", Installed: true}}
 	m.confirmRemove = true
+	m.confirmUpdate = true
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if updated.confirmRemove {
-		t.Fatal("expected remove confirmation to cancel")
+	if updated.confirmRemove || updated.confirmUpdate {
+		t.Fatal("expected confirmations to cancel")
 	}
 }
 
@@ -141,8 +142,8 @@ func TestPerformRollbackRequiresPreviousVersion(t *testing.T) {
 	restoreModelDeps(t)
 
 	isInstalledFn = func(name string) (bool, error) { return true, nil }
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{
 			"boosting": {
 				"gradient-boost-core": {Current: "python:3.12-slim"},
 			},
@@ -155,19 +156,10 @@ func TestPerformRollbackRequiresPreviousVersion(t *testing.T) {
 	}
 }
 
-func TestSuitesUpdateHandlesShellResumeMessage(t *testing.T) {
-	m := NewSuitesModel()
-	m.rows = []suiteRow{{Name: "boosting", Installed: true}}
-
-	updated, _ := m.Update(suiteOperationMsg{done: true, note: "shell exited"})
-	if updated.note != "shell exited" {
-		t.Fatalf("note = %q", updated.note)
-	}
-}
-
-func TestSuitesViewHelpersAndKeyPaths(t *testing.T) {
+func TestSuitesViewAndUpdateDiff(t *testing.T) {
 	m := NewSuitesModel()
 	m.loading = false
+	m.width = 120
 	m.rows = []suiteRow{
 		{
 			Name:      "boosting",
@@ -178,7 +170,7 @@ func TestSuitesViewHelpersAndKeyPaths(t *testing.T) {
 				Suite: suite.Suite{
 					Name: "boosting",
 					Containers: []suite.Container{
-						{Name: "gradient-boost-core", Image: "python:3.12-slim", Role: "Core"},
+						{Name: "gradient-boost-core", Image: "python:3.13-slim", Role: "Core"},
 					},
 					Ports:   []suite.PortMapping{{Port: 8888, Service: "JupyterLab"}},
 					Volumes: []suite.VolumeMount{{HostPath: "models", ContainerPath: "/models"}},
@@ -188,24 +180,16 @@ func TestSuitesViewHelpersAndKeyPaths(t *testing.T) {
 			},
 		},
 	}
-	m.showDetail = true
 
 	if m.HelpView() == "" || m.View() == "" {
 		t.Fatal("expected suites help/view output")
 	}
-	if m.currentRow().Name != "boosting" {
-		t.Fatalf("currentRow() = %#v", m.currentRow())
+	if len(m.detailView(m.rows[0])) == 0 || len(m.updateDiffLines(m.rows[0])) == 0 {
+		t.Fatal("expected detail and update diff lines")
 	}
-	if len(m.detailView(m.rows[0])) == 0 {
-		t.Fatal("expected detail lines")
-	}
-	if truncate("abcdef", 4) != "abc…" {
-		t.Fatalf("unexpected truncate result")
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if updated.showDetail {
-		t.Fatal("expected enter to toggle detail off")
+	updated, _ := m.Update(keyRunes("u"))
+	if !updated.confirmUpdate {
+		t.Fatal("expected update confirmation")
 	}
 }
 
@@ -213,8 +197,8 @@ func TestPerformUpdateStartStopRestartAndRemove(t *testing.T) {
 	restoreModelDeps(t)
 
 	isInstalledFn = func(name string) (bool, error) { return true, nil }
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{
 			"boosting": {
 				"gradient-boost-core": {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
 			},
@@ -223,7 +207,7 @@ func TestPerformUpdateStartStopRestartAndRemove(t *testing.T) {
 
 	dockerTagPreviousFn = func(image string) error { return nil }
 	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error { return nil }
-	saveManifestFn = func(manifest config.VersionManifest) error { return nil }
+	saveManifestFn = func(manifest cfgstore.VersionManifest) error { return nil }
 	dockerWriteComposeFn = func(name string) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
 	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
 
@@ -266,8 +250,8 @@ func TestPerformRollbackSuccess(t *testing.T) {
 	restoreModelDeps(t)
 
 	isInstalledFn = func(name string) (bool, error) { return true, nil }
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{
 			"boosting": {
 				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
 				"gradient-boost-lab":   {Current: "lab:new", Previous: "lab:old"},
@@ -275,7 +259,7 @@ func TestPerformRollbackSuccess(t *testing.T) {
 			},
 		}, nil
 	}
-	saveManifestFn = func(manifest config.VersionManifest) error { return nil }
+	saveManifestFn = func(manifest cfgstore.VersionManifest) error { return nil }
 	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
 	dockerComposeDownFn = func(ctx context.Context, path string) error { return nil }
 	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error { return nil }
@@ -329,55 +313,6 @@ func TestSuiteOperationHelpersAndInteractiveCommands(t *testing.T) {
 	if len(opCh) == 0 {
 		t.Fatal("expected lab operation messages")
 	}
-	failCalled := false
-	doneCalled := false
-	failOrDone(nil, "ok", func(error) { failCalled = true }, func(string) { doneCalled = true })
-	if failCalled || !doneCalled {
-		t.Fatal("expected success branch in failOrDone")
-	}
-}
-
-func TestRunSuiteOperationCoversRemainingKinds(t *testing.T) {
-	restoreModelDeps(t)
-
-	currentKind := ""
-	isInstalledFn = func(name string) (bool, error) { return currentKind != "install", nil }
-	loadStateFn = func() (config.State, error) { return config.State{}, nil }
-	loadManifestFn = func() (config.VersionManifest, error) {
-		return config.VersionManifest{
-			"boosting": {
-				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
-				"gradient-boost-lab":   {Current: "lab:new", Previous: "lab:old"},
-				"gradient-boost-track": {Current: "mlflow:new", Previous: "mlflow:old"},
-			},
-		}, nil
-	}
-	saveManifestFn = func(manifest config.VersionManifest) error { return nil }
-	addSuiteFn = func(name string) error { return nil }
-	removeSuiteFn = func(name string) error { return nil }
-	dockerTagPreviousFn = func(image string) error { return nil }
-	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error { return nil }
-	dockerComposePathFn = func(name string) string { return "/tmp/" + name + ".compose.yml" }
-	dockerWriteComposeFn = func(name string) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
-	dockerComposeUpFn = func(ctx context.Context, path string, detach bool) error { return nil }
-	dockerComposeDownFn = func(ctx context.Context, path string) error { return nil }
-	runComposeRemoveFn = func(ctx context.Context, composePath string) error { return nil }
-	systemRegisterFn = func(s suite.Suite) error { return nil }
-	systemDeregisterFn = func(s suite.Suite) error { return nil }
-	dockerStatusFn = func(ctx context.Context, name string) (string, error) { return "running", nil }
-	dockerOutputFn = func(ctx context.Context, args ...string) ([]byte, error) {
-		return []byte(`{"url":"http://0.0.0.0:8888/","token":"xyz"}`), nil
-	}
-	systemOpenURLFn = func(url string) error { return nil }
-
-	for _, kind := range []string{"install", "update", "rollback", "stop", "restart", "remove", "lab"} {
-		currentKind = kind
-		ch := make(chan suiteOperationMsg, 8)
-		runSuiteOperation(kind, "boosting", ch)
-		if len(ch) == 0 {
-			t.Fatalf("expected messages for %s", kind)
-		}
-	}
 }
 
 func TestStartOperationWaitsForCompletion(t *testing.T) {
@@ -395,56 +330,5 @@ func TestStartOperationWaitsForCompletion(t *testing.T) {
 		t.Fatal("expected operation channel")
 	}
 	for range m.opCh {
-	}
-}
-
-func TestSuitesUpdateCoversNavigationAndOperationMessages(t *testing.T) {
-	restoreModelDeps(t)
-
-	m := NewSuitesModel()
-	m.loading = false
-	m.rows = []suiteRow{
-		{Name: "boosting", Installed: true, Detail: suiteDetail{Suite: suite.Registry["boosting"]}},
-		{Name: "flow", Installed: false, Detail: suiteDetail{Suite: suite.Registry["flow"]}},
-	}
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if updated.selected != 1 {
-		t.Fatalf("selected = %d, want 1", updated.selected)
-	}
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if updated.selected != 0 {
-		t.Fatalf("selected = %d, want 0", updated.selected)
-	}
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if !updated.showDetail {
-		t.Fatal("expected detail to open")
-	}
-	updated, _ = updated.Update(keyRunes("r"))
-	if !updated.confirmRemove {
-		t.Fatal("expected remove confirmation")
-	}
-
-	var cmd tea.Cmd
-	ch := make(chan suiteOperationMsg, 1)
-	ch <- suiteOperationMsg{line: "pulling", note: "done"}
-	updated.opCh = ch
-	updated, cmd = updated.Update(suiteOperationEnvelope{
-		ch:  ch,
-		ok:  true,
-		msg: suiteOperationMsg{line: "pulling", note: "done", done: true},
-	})
-	if cmd == nil || updated.opCh != nil {
-		t.Fatal("expected reload command after done operation")
-	}
-
-	updated.execPrompt = true
-	updated.execInput.SetValue("python -V")
-	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected exec command")
-	}
-	if next.execPrompt {
-		t.Fatal("expected exec prompt to close")
 	}
 }

@@ -3,10 +3,11 @@ package model
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Gradient-Linux/concave-tui/internal/workspace"
+	workspacepkg "github.com/Gradient-Linux/concave-tui/internal/workspace"
 )
 
 func TestWorkspaceUpdateCleanCancel(t *testing.T) {
@@ -19,21 +20,39 @@ func TestWorkspaceUpdateCleanCancel(t *testing.T) {
 	}
 }
 
-func TestWorkspaceUpdateBackupCompletion(t *testing.T) {
+func TestWorkspaceUpdateBackupCompletionAndExpiry(t *testing.T) {
 	m := NewWorkspaceModel()
-	updated, _ := m.Update(workspaceOpMsg{kind: "backup", success: true, detail: "backup created"})
+	updated, cmd := m.Update(workspaceOpMsg{kind: "backup", success: true, detail: "backup created"})
 	if updated.completionNote != "backup created" {
 		t.Fatalf("completionNote = %q", updated.completionNote)
 	}
+	if cmd == nil {
+		t.Fatal("expected reload and expiry command")
+	}
+	updated, _ = updated.Update(workspaceNoteExpiredMsg{})
+	if updated.completionNote != "" {
+		t.Fatal("expected completion note to expire")
+	}
 }
 
-func TestWorkspaceUsageBar(t *testing.T) {
+func TestWorkspaceBarsAndThresholds(t *testing.T) {
 	m := NewWorkspaceModel()
+	m.width = 120
 	m.total = 100
 	m.used = 90
+	m.usages = []workspacepkg.Usage{
+		{Name: "models", Bytes: 50},
+		{Name: "outputs", Bytes: 10},
+	}
 
-	if got := m.usageBar(); !strings.Contains(got, "90%") {
-		t.Fatalf("usageBar() = %q", got)
+	if got := m.totalBar(); got == "" {
+		t.Fatal("expected total bar")
+	}
+	if got := m.directoryBar(25, 50); got == "" {
+		t.Fatal("expected directory bar")
+	}
+	if m.outputsUsage().Name != "outputs" {
+		t.Fatal("expected outputs usage lookup")
 	}
 }
 
@@ -43,8 +62,8 @@ func TestLoadWorkspaceCmdReturnsUsageData(t *testing.T) {
 	tmp := t.TempDir()
 	workspaceRootFn = func() string { return tmp }
 	workspaceEnsureFn = func() error { return nil }
-	workspaceStatusFn = func() ([]workspace.Usage, error) {
-		return []workspace.Usage{
+	workspaceStatusFn = func() ([]workspacepkg.Usage, error) {
+		return []workspacepkg.Usage{
 			{Name: "models", Bytes: 2048},
 			{Name: "notebooks", Bytes: 1024},
 		}, nil
@@ -73,9 +92,10 @@ func TestWorkspaceActivateHelpersAndCommands(t *testing.T) {
 	m.root = "~/gradient"
 	m.total = 100
 	m.used = 25
-	m.usages = []string{"models 1.0 GB"}
-	if view := m.View(); view == "" {
-		t.Fatal("expected workspace view")
+	m.usages = []workspacepkg.Usage{{Name: "models", Bytes: 1024}}
+	m.lastBackup = time.Now().Add(-2 * time.Hour)
+	if view := m.View(); view == "" || !strings.Contains(view, "Last backup") {
+		t.Fatalf("expected workspace view, got %q", view)
 	}
 	if workspaceTickCmd(1)() != (workspaceTickMsg{token: 1}) {
 		t.Fatal("expected tick message")
@@ -107,7 +127,7 @@ func TestWorkspaceUpdateCoversKeyAndMessagePaths(t *testing.T) {
 	m.root = "~/gradient"
 	m.total = 100
 	m.used = 10
-	m.usages = []string{"models 1.0 GB"}
+	m.usages = []workspacepkg.Usage{{Name: "outputs", Bytes: 1024}}
 
 	updated, cmd := m.Update(keyRunes("b"))
 	if cmd == nil || updated.busyMessage == "" {
@@ -127,7 +147,7 @@ func TestWorkspaceUpdateCoversKeyAndMessagePaths(t *testing.T) {
 	if _, cmd = updated.Update(workspaceTickMsg{token: 3}); cmd == nil {
 		t.Fatal("expected refresh tick command")
 	}
-	updated, _ = updated.Update(workspaceLoadedMsg{token: 3, root: "~/gradient", total: 100, used: 25, usages: []string{"models 1 GB"}})
+	updated, _ = updated.Update(workspaceLoadedMsg{token: 3, root: "~/gradient", total: 100, used: 25, usages: []workspacepkg.Usage{{Name: "models", Bytes: 1 << 20}}})
 	if updated.root == "" {
 		t.Fatal("expected loaded workspace state")
 	}

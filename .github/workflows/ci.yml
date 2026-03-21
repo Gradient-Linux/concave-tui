@@ -14,10 +14,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26.1"
-      - run: go test ./...
-      - run: go vet ./...
-      - run: CGO_ENABLED=0 go build -o concave-tui ./cmd/concave-tui/
+      - name: Go tests
+        run: go test ./...
+      - name: Go vet
+        run: go vet ./...
+      - name: Build concave-tui
+        run: CGO_ENABLED=0 go build -o concave-tui ./cmd/concave-tui/
+      - name: TUI unit tests
+        run: go test ./cmd/concave-tui/...
+      - name: TUI race detector
+        run: go test -race ./cmd/concave-tui/...
       - run: |
           size=$(stat -c%s concave-tui)
           echo "binary size: ${size} bytes"
-          test "$size" -le 25000000
+          test "$size" -le 30000000

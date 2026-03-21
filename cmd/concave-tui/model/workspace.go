@@ -2,23 +2,28 @@ package model
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	workspacepkg "github.com/Gradient-Linux/concave-tui/internal/workspace"
 )
 
 const workspaceRefreshInterval = 5 * time.Second
 
 type workspaceLoadedMsg struct {
-	token   int
-	used    uint64
-	total   uint64
-	usages  []string
-	root    string
-	loadErr error
+	token      int
+	used       uint64
+	total      uint64
+	usages     []workspacepkg.Usage
+	root       string
+	lastBackup time.Time
+	loadErr    error
 }
 
 type workspaceTickMsg struct {
@@ -32,6 +37,8 @@ type workspaceOpMsg struct {
 	err     error
 }
 
+type workspaceNoteExpiredMsg struct{}
+
 type WorkspaceModel struct {
 	width          int
 	height         int
@@ -42,7 +49,8 @@ type WorkspaceModel struct {
 	root           string
 	used           uint64
 	total          uint64
-	usages         []string
+	usages         []workspacepkg.Usage
+	lastBackup     time.Time
 	lastErr        error
 	busyMessage    string
 	completionNote string
@@ -104,6 +112,7 @@ func (m WorkspaceModel) Update(msg tea.Msg) (WorkspaceModel, tea.Cmd) {
 		m.used = msg.used
 		m.total = msg.total
 		m.usages = msg.usages
+		m.lastBackup = msg.lastBackup
 		m.lastErr = msg.loadErr
 	case workspaceTickMsg:
 		if !m.active || msg.token != m.loadToken {
@@ -120,7 +129,9 @@ func (m WorkspaceModel) Update(msg tea.Msg) (WorkspaceModel, tea.Cmd) {
 		m.loading = true
 		m.loadToken++
 		token := m.loadToken
-		return m, loadWorkspaceCmd(token)
+		return m, tea.Batch(loadWorkspaceCmd(token), workspaceNoteExpiryCmd())
+	case workspaceNoteExpiredMsg:
+		m.completionNote = ""
 	}
 	return m, nil
 }
@@ -134,21 +145,30 @@ func (m WorkspaceModel) View() string {
 	}
 
 	lines := []string{
-		fmt.Sprintf("%s   %s free of %s", m.root, humanBytes(m.total-m.used), humanBytes(m.total)),
-		m.usageBar(),
+		m.root,
+		"",
+		fmt.Sprintf("Total    %s  %s free / %s (%.0f%%)", m.totalBar(), humanBytes(m.total-m.used), humanBytes(m.total), m.usedRatio()*100),
 		"",
 	}
-	lines = append(lines, m.usages...)
+	maxUsage := int64(1)
+	for _, usage := range m.usages {
+		if usage.Bytes > maxUsage {
+			maxUsage = usage.Bytes
+		}
+	}
+	for _, usage := range m.usages {
+		lines = append(lines, fmt.Sprintf("%-10s %-8s %s", usage.Name, usage.Human(), m.directoryBar(usage.Bytes, maxUsage)))
+	}
 	lines = append(lines, "")
 	if m.busyMessage != "" {
 		lines = append(lines, warnText(m.busyMessage))
 	} else {
-		lines = append(lines, "b  backup notebooks + models")
+		lines = append(lines, fmt.Sprintf("[b] backup notebooks + models      Last backup: %s", relativeBackupTime(m.lastBackup)))
 	}
 	if m.confirmClean {
-		lines = append(lines, "Clean outputs? y confirm · esc cancel")
+		lines = append(lines, fmt.Sprintf("Clean outputs? %s will be freed. y confirm · esc cancel", m.outputsUsage().Human()))
 	} else {
-		lines = append(lines, "x  clean outputs")
+		lines = append(lines, fmt.Sprintf("[x] clean outputs                  %s will be freed", m.outputsUsage().Human()))
 	}
 	if m.completionNote != "" {
 		lines = append(lines, successText(m.completionNote))
@@ -157,26 +177,48 @@ func (m WorkspaceModel) View() string {
 }
 
 func (m WorkspaceModel) HelpView() string {
-	return "Workspace\nb backup · x clean outputs · r refresh"
+	return "Workspace\nb backup · x clean outputs · r refresh · j/k move in other views"
 }
 
-func (m WorkspaceModel) usageBar() string {
+func (m WorkspaceModel) usedRatio() float64 {
 	if m.total == 0 {
+		return 0
+	}
+	return float64(m.used) / float64(m.total)
+}
+
+func (m WorkspaceModel) totalBar() string {
+	width := max(20, min(36, m.width-34))
+	ratio := m.usedRatio()
+	freeRatio := 1 - ratio
+	styleThreshold := false
+	if freeRatio < 0.20 {
+		styleThreshold = true
+	}
+	return gradientBar(width, ratio, styleThreshold)
+}
+
+func (m WorkspaceModel) directoryBar(value, maxValue int64) string {
+	if maxValue <= 0 {
 		return ""
 	}
-	ratio := float64(m.used) / float64(m.total)
-	filled := int(ratio * 32)
-	if filled > 32 {
-		filled = 32
+	width := max(20, min(40, m.width-26))
+	ratio := float64(value) / float64(maxValue)
+	filled := int(ratio * float64(width))
+	if filled > width {
+		filled = width
 	}
-	color := ColorMid
-	if ratio >= 0.9 {
-		color = ColorError
-	} else if ratio >= 0.8 {
-		color = ColorWarn
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMid)).Render(strings.Repeat("█", filled)) +
+		mutedText(strings.Repeat("░", width-filled))
+}
+
+func (m WorkspaceModel) outputsUsage() workspacepkg.Usage {
+	for _, usage := range m.usages {
+		if usage.Name == "outputs" {
+			return usage
+		}
 	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", 32-filled)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(bar) + fmt.Sprintf("   %.0f%%", ratio*100)
+	return workspacepkg.Usage{Name: "outputs"}
 }
 
 func loadWorkspaceCmd(token int) tea.Cmd {
@@ -194,20 +236,16 @@ func loadWorkspaceCmd(token int) tea.Cmd {
 			return workspaceLoadedMsg{token: token, loadErr: err}
 		}
 
-		lines := make([]string, 0, len(usages))
-		for _, usage := range usages {
-			lines = append(lines, fmt.Sprintf("%-10s %s", usage.Name, usage.Human()))
-		}
-
 		total := stat.Blocks * uint64(stat.Bsize)
 		free := stat.Bavail * uint64(stat.Bsize)
 		used := total - free
 		return workspaceLoadedMsg{
-			token:  token,
-			root:   root,
-			total:  total,
-			used:   used,
-			usages: lines,
+			token:      token,
+			root:       root,
+			total:      total,
+			used:       used,
+			usages:     usages,
+			lastBackup: latestBackupTime(filepath.Join(root, "backups")),
 		}
 	}
 }
@@ -215,6 +253,12 @@ func loadWorkspaceCmd(token int) tea.Cmd {
 func workspaceTickCmd(token int) tea.Cmd {
 	return tea.Tick(workspaceRefreshInterval, func(time.Time) tea.Msg {
 		return workspaceTickMsg{token: token}
+	})
+}
+
+func workspaceNoteExpiryCmd() tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+		return workspaceNoteExpiredMsg{}
 	})
 }
 
@@ -235,4 +279,33 @@ func runWorkspaceCleanCmd() tea.Cmd {
 		}
 		return workspaceOpMsg{kind: "clean", success: true, detail: "outputs cleaned"}
 	}
+}
+
+func latestBackupTime(dir string) time.Time {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return time.Time{}
+	}
+	latest := time.Time{}
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+	}
+	return latest
+}
+
+func relativeBackupTime(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	delta := time.Since(t).Round(time.Hour)
+	if delta < time.Minute {
+		return "just now"
+	}
+	return delta.String() + " ago"
 }

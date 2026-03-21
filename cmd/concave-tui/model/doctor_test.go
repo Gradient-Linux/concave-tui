@@ -35,12 +35,26 @@ func TestDoctorViewShowsRecovery(t *testing.T) {
 	}
 }
 
-func TestDoctorGPUCheckCPUOnly(t *testing.T) {
+func TestDoctorGPUCheckVariants(t *testing.T) {
 	restoreModelDeps(t)
-	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
 
-	check := doctorGPUCheck()
-	if check.status != "warn" || !strings.Contains(check.detail, "CPU-only mode") {
+	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
+	if check := doctorGPUCheck(); check.status != "warn" || !strings.Contains(check.detail, "CPU-only mode") {
+		t.Fatalf("doctorGPUCheck() = %#v", check)
+	}
+
+	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNVIDIA, nil }
+	doctorGPUStatsFn = func() ([]gpu.NVIDIADevice, error) {
+		return []gpu.NVIDIADevice{{Name: "RTX 4090", DriverVersion: "570.12"}}, nil
+	}
+	doctorCUDAFn = func() (string, error) { return "12.4", nil }
+	gpuToolkitFn = func() (bool, error) { return true, nil }
+	if check := doctorGPUCheck(); check.status != "pass" || !strings.Contains(check.detail, "CUDA 12.4") {
+		t.Fatalf("doctorGPUCheck() = %#v", check)
+	}
+
+	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateAMD, nil }
+	if check := doctorGPUCheck(); check.status != "warn" {
 		t.Fatalf("doctorGPUCheck() = %#v", check)
 	}
 }
@@ -152,21 +166,5 @@ func TestDoctorRunChecksProducesBatch(t *testing.T) {
 		if checkCmd() == nil {
 			t.Fatal("expected each doctor check command to emit a message")
 		}
-	}
-}
-
-func TestDoctorGPUCheckVariants(t *testing.T) {
-	restoreModelDeps(t)
-
-	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNVIDIA, nil }
-	gpuRecommendedFn = func() (string, error) { return "570", nil }
-	gpuToolkitFn = func() (bool, error) { return true, nil }
-	if check := doctorGPUCheck(); check.status != "pass" {
-		t.Fatalf("doctorGPUCheck() = %#v", check)
-	}
-
-	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateAMD, nil }
-	if check := doctorGPUCheck(); check.status != "warn" {
-		t.Fatalf("doctorGPUCheck() = %#v", check)
 	}
 }

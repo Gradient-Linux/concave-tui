@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
 )
 
 func restoreMainDeps(t *testing.T) {
@@ -13,7 +15,7 @@ func restoreMainDeps(t *testing.T) {
 
 	oldTerminalSupported := terminalSupportedFn
 	oldDockerRunning := dockerRunningFn
-	oldEnsureWorkspace := ensureWorkspaceFn
+	oldLoadConfig := loadConfigFn
 	oldExitProgram := exitProgram
 	oldRunProgram := runProgramFn
 	oldVersion := Version
@@ -21,7 +23,7 @@ func restoreMainDeps(t *testing.T) {
 	t.Cleanup(func() {
 		terminalSupportedFn = oldTerminalSupported
 		dockerRunningFn = oldDockerRunning
-		ensureWorkspaceFn = oldEnsureWorkspace
+		loadConfigFn = oldLoadConfig
 		exitProgram = oldExitProgram
 		runProgramFn = oldRunProgram
 		Version = oldVersion
@@ -65,7 +67,7 @@ func TestRunLaunchesProgram(t *testing.T) {
 
 	terminalSupportedFn = func() bool { return true }
 	dockerRunningFn = func() (bool, error) { return true, nil }
-	ensureWorkspaceFn = func() error { return nil }
+	loadConfigFn = func() (tuiconfig.Config, error) { return tuiconfig.DefaultConfig(), nil }
 
 	called := false
 	runProgramFn = func(root tea.Model) error {
@@ -81,35 +83,21 @@ func TestRunLaunchesProgram(t *testing.T) {
 	}
 }
 
-func TestRunRejectsPositionalArguments(t *testing.T) {
+func TestRunRejectsPositionalArgumentsAndConfigError(t *testing.T) {
 	restoreMainDeps(t)
 	if code := run([]string{"extra"}); code != 1 {
 		t.Fatalf("run(extra) = %d, want 1", code)
 	}
-}
 
-func TestRunRejectsWorkspaceError(t *testing.T) {
-	restoreMainDeps(t)
 	terminalSupportedFn = func() bool { return true }
 	dockerRunningFn = func() (bool, error) { return true, nil }
-	ensureWorkspaceFn = func() error { return errors.New("workspace failed") }
-
+	loadConfigFn = func() (tuiconfig.Config, error) { return tuiconfig.Config{}, errors.New("config failed") }
 	if code := run(nil); code != 1 {
 		t.Fatalf("run() = %d, want 1", code)
 	}
 }
 
-func TestRunRejectsDockerNotRunning(t *testing.T) {
-	restoreMainDeps(t)
-	terminalSupportedFn = func() bool { return true }
-	dockerRunningFn = func() (bool, error) { return false, nil }
-
-	if code := run(nil); code != 1 {
-		t.Fatalf("run() = %d, want 1", code)
-	}
-}
-
-func TestMainUsesRunPath(t *testing.T) {
+func TestMainUsesRunPathAndExitProgram(t *testing.T) {
 	restoreMainDeps(t)
 
 	oldArgs := os.Args
@@ -117,34 +105,23 @@ func TestMainUsesRunPath(t *testing.T) {
 
 	os.Args = []string{"concave-tui", "--help"}
 	main()
-}
-
-func TestMainUsesExitProgramOnFailure(t *testing.T) {
-	restoreMainDeps(t)
-
-	oldArgs := os.Args
-	t.Cleanup(func() { os.Args = oldArgs })
 
 	os.Args = []string{"concave-tui"}
 	terminalSupportedFn = func() bool { return false }
 	code := 0
 	exitProgram = func(next int) { code = next }
-
 	main()
-
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 }
 
-func TestTerminalSupportedRejectsMissingTerm(t *testing.T) {
+func TestTerminalSupportedRejectsMissingOrDumbTERM(t *testing.T) {
 	t.Setenv("TERM", "")
 	if terminalSupported() {
 		t.Fatal("expected missing TERM to be rejected")
 	}
-}
 
-func TestTerminalSupportedRejectsDumbTerminal(t *testing.T) {
 	t.Setenv("TERM", "dumb")
 	if terminalSupported() {
 		t.Fatal("expected dumb TERM to be rejected")

@@ -40,7 +40,7 @@ type logEnvelope struct {
 
 func startDockerLogStream(container string) (func(), <-chan dockerLogEvent, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, "docker", "logs", "-f", container)
+	cmd := exec.CommandContext(ctx, "docker", "logs", "--tail", "100", "-f", container)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -184,7 +184,7 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 		return m, waitForLogEvent(msg.ch)
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "up":
+		case "up", "k":
 			if m.follow {
 				m.follow = false
 			}
@@ -193,12 +193,24 @@ func (m LogsModel) Update(msg tea.Msg) (LogsModel, tea.Cmd) {
 				m.lines = nil
 				return m, m.startStreamForSelection()
 			}
-		case "down":
+		case "down", "j":
 			if m.selected < len(m.targets)-1 {
 				m.selected++
 				m.lines = nil
 				return m, m.startStreamForSelection()
 			}
+		case "g":
+			m.viewport.GotoTop()
+			m.follow = false
+		case "G", "end":
+			m.follow = true
+			m.syncViewport()
+		case "ctrl+d":
+			m.follow = false
+			m.viewport.HalfViewDown()
+		case "ctrl+u":
+			m.follow = false
+			m.viewport.HalfViewUp()
 		case "/":
 			m.searching = true
 			m.searchInput.Focus()
