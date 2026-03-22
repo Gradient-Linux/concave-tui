@@ -227,33 +227,15 @@ func (m WorkspaceModel) refreshInterval() time.Duration {
 }
 
 func (m WorkspaceModel) renderHardwareOverview() string {
-	chartHeight := max(8, min(12, m.height/4))
-	if m.width >= 110 {
-		leftWidth := max(32, (m.width-2)/2)
-		rightWidth := max(32, m.width-leftWidth-2)
-		left := m.renderMetricPanel("GPU", m.renderGPUChart(leftWidth-4, chartHeight-3), leftWidth, chartHeight)
-		right := m.renderMetricPanel("CPU", m.renderCPUChart(rightWidth-4, chartHeight-3), rightWidth, chartHeight)
-		return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n\n" + m.renderSystemBars()
-	}
-
-	return strings.Join([]string{
-		m.renderMetricPanel("GPU", m.renderGPUChart(m.width-4, chartHeight-3), m.width, chartHeight),
+	lines := []string{
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Hardware"),
+		m.renderGPUChart(m.width, 0),
 		"",
-		m.renderMetricPanel("CPU", m.renderCPUChart(m.width-4, chartHeight-3), m.width, chartHeight),
+		m.renderCPUChart(m.width, 0),
 		"",
 		m.renderSystemBars(),
-	}, "\n")
-}
-
-func (m WorkspaceModel) renderMetricPanel(title, body string, width, height int) string {
-	bodyHeight := max(3, height-3)
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(height).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(ColorDeep)).
-		Padding(0, 1).
-		Render(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(title) + "\n" + padToHeight(body, bodyHeight))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m WorkspaceModel) renderGPUChart(width, height int) string {
@@ -268,12 +250,14 @@ func (m WorkspaceModel) renderGPUChart(width, height int) string {
 		return mutedText("No NVIDIA telemetry available")
 	}
 	device := m.gpuDevices[0]
-	return fmt.Sprintf("%s  %d%%\n%s", truncate(device.Name, max(16, width-8)), device.Utilization, utilizationBar(max(16, width-6), float64(device.Utilization)/100, false))
+	barWidth := max(18, min(48, width-26))
+	return fmt.Sprintf("GPU    %s  %d%%\n%s", truncate(device.Name, max(16, width-16)), device.Utilization, utilizationBar(barWidth, float64(device.Utilization)/100, false))
 }
 
 func (m WorkspaceModel) renderCPUChart(width, height int) string {
 	_ = height
-	return fmt.Sprintf("Total CPU  %.0f%%\n%s", m.cpuUsage, utilizationBar(max(16, width-6), m.cpuUsage/100, false))
+	barWidth := max(18, min(48, width-26))
+	return fmt.Sprintf("CPU    total  %.0f%%\n%s", m.cpuUsage, utilizationBar(barWidth, m.cpuUsage/100, false))
 }
 
 func (m WorkspaceModel) renderSystemBars() string {

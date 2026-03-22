@@ -148,6 +148,20 @@ func TestLoadSuitesCmdMarksUnconfiguredForge(t *testing.T) {
 	}
 }
 
+func TestSuitesDetailViewShowsRemoveForProblemState(t *testing.T) {
+	m := NewSuitesModel()
+	lines := m.detailView(suiteRow{
+		Name:      "forge",
+		Installed: true,
+		State:     "⚠ unconfigured",
+		Problem:   "Forge is marked installed but its component selection was not saved.",
+	})
+	rendered := strings.Join(lines, "\n")
+	if !strings.Contains(rendered, "[r]remove stale install") {
+		t.Fatalf("detailView() = %q", rendered)
+	}
+}
+
 func TestSuitesUpdateRemoveAndUpdateCancel(t *testing.T) {
 	m := NewSuitesModel()
 	m.rows = []suiteRow{{Name: "boosting", Installed: true}}
@@ -265,6 +279,66 @@ func TestPerformUpdateStartStopRestartAndRemove(t *testing.T) {
 	}
 	if upCalls == 0 || downCalls == 0 {
 		t.Fatalf("expected compose up/down calls, got up=%d down=%d", upCalls, downCalls)
+	}
+}
+
+func TestPerformRemoveSucceedsWhenComposeIsMissing(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return true, nil }
+	dockerComposePathFn = func(name string) string { return "/tmp/does-not-exist.compose.yml" }
+	removeSuiteFn = func(name string) error { return nil }
+	loadManifestFn = func() (cfgstore.VersionManifest, error) {
+		return cfgstore.VersionManifest{
+			"forge": {
+				"gradient-boost-core": {Current: "python:3.12-slim"},
+			},
+		}, nil
+	}
+	saveManifestFn = func(manifest cfgstore.VersionManifest) error { return nil }
+	systemDeregisterFn = func(s suite.Suite) error { return nil }
+	dockerOutputFn = func(ctx context.Context, args ...string) ([]byte, error) { return nil, nil }
+
+	if err := performRemove("forge"); err != nil {
+		t.Fatalf("performRemove() error = %v", err)
+	}
+}
+
+func TestPerformInstallIgnoresStaleForgeConflict(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return false, nil }
+	loadStateFn = func() (cfgstore.State, error) { return cfgstore.State{Installed: []string{"forge"}}, nil }
+	loadManifestFn = func() (cfgstore.VersionManifest, error) { return cfgstore.VersionManifest{}, nil }
+	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
+	dockerTagPreviousFn = func(image string) error { return nil }
+	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error { return nil }
+	dockerWriteComposeFn = func(name string) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
+	saveManifestFn = func(manifest cfgstore.VersionManifest) error { return nil }
+	addSuiteFn = func(name string) error { return nil }
+
+	if err := performInstall("boosting", func(string) {}); err != nil {
+		t.Fatalf("performInstall() error = %v", err)
+	}
+}
+
+func TestSuitesViewKeepsListVisibleWhenLastErrSet(t *testing.T) {
+	m := NewSuitesModel()
+	m.loading = false
+	m.width = 120
+	m.lastErr = errors.New("port 8888 is reserved by an installed forge suite")
+	m.rows = []suiteRow{
+		{Name: "boosting", Installed: false, State: "— not installed"},
+		{Name: "forge", Installed: true, State: "⚠ unconfigured", Problem: "Forge is marked installed but its component selection was not saved."},
+	}
+	m.selected = 1
+
+	rendered := m.View()
+	if !strings.Contains(rendered, "forge") || !strings.Contains(rendered, "[r]remove stale install") {
+		t.Fatalf("View() = %q", rendered)
+	}
+	if !strings.Contains(rendered, "port 8888 is reserved") {
+		t.Fatalf("View() missing error detail: %q", rendered)
 	}
 }
 

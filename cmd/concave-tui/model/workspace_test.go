@@ -92,6 +92,7 @@ func TestWorkspaceActivateHelpersAndCommands(t *testing.T) {
 	m.root = "~/gradient"
 	m.total = 100
 	m.used = 25
+	m.cpuUsage = 42
 	m.usages = []workspacepkg.Usage{{Name: "models", Bytes: 1024}}
 	m.lastBackup = time.Now().Add(-2 * time.Hour)
 	if view := m.View(); view == "" || !strings.Contains(view, "Last backup") {
@@ -113,6 +114,21 @@ func TestWorkspaceActivateHelpersAndCommands(t *testing.T) {
 	m.Deactivate()
 	if m.active {
 		t.Fatal("expected deactivate to clear active flag")
+	}
+}
+
+func TestWorkspaceHardwareOverviewUsesInlineBars(t *testing.T) {
+	m := NewWorkspaceModel()
+	m.width = 120
+	m.cpuUsage = 37
+	m.gpuState = 0
+
+	rendered := m.renderHardwareOverview()
+	if strings.Contains(rendered, "╭") || strings.Contains(rendered, "╮") || strings.Contains(rendered, "│") {
+		t.Fatalf("renderHardwareOverview() should not use bordered panels: %q", rendered)
+	}
+	if !strings.Contains(rendered, "CPU") {
+		t.Fatalf("renderHardwareOverview() = %q", rendered)
 	}
 }
 

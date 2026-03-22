@@ -243,11 +243,8 @@ func (m SuitesModel) View() string {
 	if m.loading {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Render("Loading suites…")
 	}
-	if m.lastErr != nil {
-		return errorText(m.lastErr.Error())
-	}
 
-	leftWidth := max(24, (m.width * 30) / 100)
+	leftWidth := max(24, (m.width*30)/100)
 	rightWidth := max(36, m.width-leftWidth-3)
 	leftLines := []string{"Suites"}
 	for idx, row := range m.rows {
@@ -283,6 +280,9 @@ func (m SuitesModel) View() string {
 	if m.note != "" {
 		rightLines = append(rightLines, "", successText(m.note))
 	}
+	if m.lastErr != nil {
+		rightLines = append(rightLines, "", errorText(m.lastErr.Error()))
+	}
 	left := lipgloss.NewStyle().Width(leftWidth).Render(strings.Join(leftLines, "\n"))
 	right := lipgloss.NewStyle().Width(rightWidth).Render(strings.Join(rightLines, "\n"))
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
@@ -302,7 +302,11 @@ func (m SuitesModel) currentRow() suiteRow {
 func (m SuitesModel) detailView(row suiteRow) []string {
 	lines := []string{fmt.Sprintf("%s   %s", row.Name, row.State)}
 	if row.Problem != "" {
-		lines = append(lines, "", row.Problem, "Run concave remove forge, then reinstall it.")
+		lines = append(lines, "", row.Problem)
+		if row.Installed {
+			lines = append(lines, "", "[r]remove stale install")
+		}
+		lines = append(lines, mutedText("Clear the stale suite state in the TUI, then retry the install."))
 		return lines
 	}
 	lines = append(lines, "", "Container              Status    Image")
@@ -523,11 +527,14 @@ func performInstall(name string, send func(string), progressFns ...func(string, 
 	if err != nil {
 		return err
 	}
-	conflicts, err := system.CheckConflicts(s, state.Installed)
+	conflicts, err := installConflicts(s, state.Installed)
 	if err != nil {
 		return err
 	}
 	if len(conflicts) > 0 {
+		if conflicts[0].ExistingSuite == "forge" {
+			return fmt.Errorf("port %d is reserved by an installed forge suite; select forge and press r to remove it, then retry", conflicts[0].Port)
+		}
 		return fmt.Errorf("port %d already used by %s", conflicts[0].Port, conflicts[0].ExistingSuite)
 	}
 
@@ -758,11 +765,20 @@ func performRemove(name string, progressFns ...func(string, int, int)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	progress("Removing", 0, 4)
-	if err := runComposeRemoveFn(ctx, dockerComposePathFn(name)); err != nil {
-		return err
+	composePath := dockerComposePathFn(name)
+	if _, statErr := os.Stat(composePath); statErr == nil {
+		if err := runComposeRemoveFn(ctx, composePath); err != nil {
+			return err
+		}
+	} else if os.IsNotExist(statErr) {
+		if err := cleanupSuiteContainers(ctx, name); err != nil {
+			return err
+		}
+	} else {
+		return statErr
 	}
 	progress("Removing", 1, 4)
-	_ = os.Remove(dockerComposePathFn(name))
+	_ = os.Remove(composePath)
 	if err := removeSuiteFn(name); err != nil {
 		return err
 	}
@@ -775,7 +791,7 @@ func performRemove(name string, progressFns ...func(string, int, int)) error {
 	if err := saveManifestFn(manifest); err != nil {
 		return err
 	}
-	s, err := suiteGetFn(name)
+	s, err := cleanupSuiteDefinition(name)
 	if err != nil {
 		return err
 	}
@@ -784,6 +800,57 @@ func performRemove(name string, progressFns ...func(string, int, int)) error {
 		return err
 	}
 	progress("Removing", 4, 4)
+	return nil
+}
+
+func installConflicts(s suite.Suite, installed []string) ([]system.PortConflict, error) {
+	conflicts, err := system.CheckConflicts(s, installed)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]system.PortConflict, 0, len(conflicts))
+	for _, conflict := range conflicts {
+		if conflict.ExistingSuite == "forge" {
+			if _, forgeErr := currentSuiteDefinition("forge"); isMissingForgeSelection(forgeErr) {
+				continue
+			}
+		}
+		filtered = append(filtered, conflict)
+	}
+	return filtered, nil
+}
+
+func cleanupSuiteDefinition(name string) (suite.Suite, error) {
+	s, err := currentSuiteDefinition(name)
+	if err == nil {
+		return s, nil
+	}
+	if name == "forge" && isMissingForgeSelection(err) {
+		return suiteGetFn(name)
+	}
+	return suite.Suite{}, err
+}
+
+func cleanupSuiteContainers(ctx context.Context, name string) error {
+	s, err := cleanupSuiteDefinition(name)
+	if err != nil {
+		return err
+	}
+	if len(s.Containers) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(s.Containers)+2)
+	args = append(args, "rm", "-f")
+	for _, container := range s.Containers {
+		args = append(args, container.Name)
+	}
+	output, err := dockerOutputFn(ctx, args...)
+	if err != nil {
+		text := strings.ToLower(err.Error() + " " + string(output))
+		if !strings.Contains(text, "no such") {
+			return err
+		}
+	}
 	return nil
 }
 
