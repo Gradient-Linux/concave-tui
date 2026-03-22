@@ -16,11 +16,8 @@ func TestSettingsRadioSelectionRendersAndMoves(t *testing.T) {
 	if !strings.Contains(view, "● auto") {
 		t.Fatalf("expected auto to be selected, got %q", view)
 	}
-	if !strings.Contains(view, "Balance view") {
-		t.Fatalf("expected preset label in view, got %q", view)
-	}
-	if strings.Contains(view, "GPU, suites, system") {
-		t.Fatalf("unexpected preset description text in view, got %q", view)
+	if strings.Contains(view, "Dashboard Preset") || strings.Contains(view, "Balance view") {
+		t.Fatalf("unexpected dashboard preset controls in view, got %q", view)
 	}
 	if strings.Contains(view, "Width threshold    ╭") || strings.Contains(view, "Height threshold   ╭") || strings.Contains(view, "Refresh interval   ╭") {
 		t.Fatalf("unexpected boxed numeric row in view, got %q", view)
@@ -66,33 +63,26 @@ func TestSettingsNumericFieldsFocusIndependently(t *testing.T) {
 	}
 }
 
-func TestSettingsPresetSelectionAndSave(t *testing.T) {
+func TestSettingsSaveKeepsDisplayConfig(t *testing.T) {
 	m := NewSettingsModel(tuiconfig.DefaultConfig())
-	m.focusedField = settingsFieldPreset
+	m.focusedField = settingsFieldSidebar
 	m.insertMode = false
 
-	nextPreset := m.presetRadio.Options[(m.presetRadio.Selected+1)%len(m.presetRadio.Options)]
 	updated, _ := m.Update(keyRunes("l"))
-	if updated.current.ActivePreset != nextPreset {
-		t.Fatalf("active preset = %q, want %q", updated.current.ActivePreset, nextPreset)
+	if updated.current.Display.SidebarDefault != "collapsed" {
+		t.Fatalf("sidebar default = %q", updated.current.Display.SidebarDefault)
 	}
 
 	updated, cmd := updated.Update(keyRunes("s"))
 	if cmd == nil {
-		t.Fatal("expected save batch command")
+		t.Fatal("expected save command")
 	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok || len(batch) != 2 {
+	got, ok := cmd().(settingsSavedMsg)
+	if !ok {
 		t.Fatalf("save command = %#v", cmd())
 	}
-	if got := batch[0](); got.(settingsSavedMsg).Config.ActivePreset != nextPreset {
-		t.Fatalf("saved preset = %q", got.(settingsSavedMsg).Config.ActivePreset)
-	}
-	if got := batch[1](); got.(PresetChangedMsg).PresetName != nextPreset {
-		t.Fatalf("preset change = %q", got.(PresetChangedMsg).PresetName)
-	}
-	if updated.current.ActivePreset != nextPreset {
-		t.Fatalf("current preset = %q", updated.current.ActivePreset)
+	if got.Config.Display.SidebarDefault != "collapsed" {
+		t.Fatalf("saved sidebar default = %q", got.Config.Display.SidebarDefault)
 	}
 }
 

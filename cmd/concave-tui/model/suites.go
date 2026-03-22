@@ -40,11 +40,14 @@ type suitesLoadedMsg struct {
 }
 
 type suiteOperationMsg struct {
-	line string
-	done bool
-	err  error
-	note string
-	url  string
+	line          string
+	done          bool
+	err           error
+	note          string
+	url           string
+	progressLabel string
+	progressStep  int
+	progressTotal int
 }
 
 type suiteOperationEnvelope struct {
@@ -75,6 +78,9 @@ type SuitesModel struct {
 	lastErr       error
 	note          string
 	opLines       []string
+	opProgress    int
+	opTotal       int
+	opLabel       string
 	updatePreview []string
 	opCh          <-chan suiteOperationMsg
 }
@@ -147,6 +153,11 @@ func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
 			if len(m.opLines) > 12 {
 				m.opLines = m.opLines[len(m.opLines)-12:]
 			}
+		}
+		if msg.msg.progressTotal > 0 {
+			m.opProgress = msg.msg.progressStep
+			m.opTotal = msg.msg.progressTotal
+			m.opLabel = msg.msg.progressLabel
 		}
 		if msg.msg.err != nil {
 			m.lastErr = msg.msg.err
@@ -256,6 +267,9 @@ func (m SuitesModel) View() string {
 	}
 	if m.confirmRemove {
 		rightLines = append(rightLines, "", "Remove "+m.currentRow().Name+"? Your data in ~/gradient/ will not be touched.", "y confirm · n cancel")
+	}
+	if m.opTotal > 0 {
+		rightLines = append(rightLines, "", m.renderOperationProgress(rightWidth))
 	}
 	if len(m.opLines) > 0 {
 		rightLines = append(rightLines, "", "Progress:")
@@ -418,6 +432,9 @@ func (m *SuitesModel) startOperation(kind string) tea.Cmd {
 	m.opLines = nil
 	m.note = ""
 	m.lastErr = nil
+	m.opProgress = 0
+	m.opTotal = 0
+	m.opLabel = ""
 	name := m.currentRow().Name
 	go func() {
 		defer close(ch)
@@ -435,24 +452,27 @@ func waitForSuiteOperation(ch <-chan suiteOperationMsg) tea.Cmd {
 
 func runSuiteOperation(kind, name string, ch chan<- suiteOperationMsg) {
 	send := func(line string) { ch <- suiteOperationMsg{line: line} }
+	progress := func(label string, step, total int) {
+		ch <- suiteOperationMsg{progressLabel: label, progressStep: step, progressTotal: total}
+	}
 	done := func(note string) { ch <- suiteOperationMsg{done: true, note: note} }
 	fail := func(err error) { ch <- suiteOperationMsg{done: true, err: err} }
 
 	switch kind {
 	case "install":
-		failOrDone(performInstall(name, send), name+" installed", fail, done)
+		failOrDone(performInstall(name, send, progress), name+" installed", fail, done)
 	case "update":
-		failOrDone(performUpdate(name, send), name+" updated", fail, done)
+		failOrDone(performUpdate(name, send, progress), name+" updated", fail, done)
 	case "rollback":
-		failOrDone(performRollback(name, send), name+" rolled back", fail, done)
+		failOrDone(performRollback(name, send, progress), name+" rolled back", fail, done)
 	case "start":
-		failOrDone(performStart(name), name+" started", fail, done)
+		failOrDone(performStart(name, progress), name+" started", fail, done)
 	case "stop":
-		failOrDone(performStop(name), name+" stopped", fail, done)
+		failOrDone(performStop(name, progress), name+" stopped", fail, done)
 	case "restart":
-		failOrDone(performRestart(name), name+" restarted", fail, done)
+		failOrDone(performRestart(name, progress), name+" restarted", fail, done)
 	case "remove":
-		failOrDone(performRemove(name), name+" removed", fail, done)
+		failOrDone(performRemove(name, progress), name+" removed", fail, done)
 	case "lab":
 		url, err := openLabURL(name)
 		if err != nil {
@@ -475,7 +495,11 @@ func failOrDone(err error, note string, fail func(error), done func(string)) {
 	done(note)
 }
 
-func performInstall(name string, send func(string)) error {
+func performInstall(name string, send func(string), progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
 	s, err := suiteGetFn(name)
 	if err != nil {
 		return err
@@ -509,6 +533,9 @@ func performInstall(name string, send func(string)) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	totalSteps := len(s.Containers) + 3
+	step := 0
+	progress("Installing", step, totalSteps)
 	for _, container := range s.Containers {
 		send("pulling " + container.Image)
 		if err := dockerTagPreviousFn(container.Image); err != nil {
@@ -517,6 +544,8 @@ func performInstall(name string, send func(string)) error {
 		if err := dockerPullStreamFn(ctx, container.Image, func(line string) { send(line) }); err != nil {
 			return err
 		}
+		step++
+		progress("Installing", step, totalSteps)
 	}
 
 	if name == "forge" {
@@ -530,6 +559,8 @@ func performInstall(name string, send func(string)) error {
 	} else if _, err := dockerWriteComposeFn(name); err != nil {
 		return err
 	}
+	step++
+	progress("Installing", step, totalSteps)
 
 	manifest, err := loadManifestFn()
 	if err != nil {
@@ -539,10 +570,20 @@ func performInstall(name string, send func(string)) error {
 	if err := saveManifestFn(manifest); err != nil {
 		return err
 	}
-	return addSuiteFn(name)
+	step++
+	progress("Installing", step, totalSteps)
+	if err := addSuiteFn(name); err != nil {
+		return err
+	}
+	progress("Installing", totalSteps, totalSteps)
+	return nil
 }
 
-func performUpdate(name string, send func(string)) error {
+func performUpdate(name string, send func(string), progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
 	installed, err := isInstalledFn(name)
 	if err != nil {
 		return err
@@ -560,6 +601,9 @@ func performUpdate(name string, send func(string)) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	totalSteps := len(s.Containers) + 3
+	step := 0
+	progress("Updating", step, totalSteps)
 	for _, container := range s.Containers {
 		send("pulling " + container.Image)
 		if err := dockerTagPreviousFn(container.Image); err != nil {
@@ -569,17 +613,31 @@ func performUpdate(name string, send func(string)) error {
 			return err
 		}
 		manifest = recordUpdateFn(manifest, name, container.Name, container.Image)
+		step++
+		progress("Updating", step, totalSteps)
 	}
 	if err := saveManifestFn(manifest); err != nil {
 		return err
 	}
+	step++
+	progress("Updating", step, totalSteps)
 	if _, err := writeComposeForSuite(name); err != nil {
 		return err
 	}
-	return dockerComposeUpFn(ctx, dockerComposePathFn(name), true)
+	step++
+	progress("Updating", step, totalSteps)
+	if err := dockerComposeUpFn(ctx, dockerComposePathFn(name), true); err != nil {
+		return err
+	}
+	progress("Updating", totalSteps, totalSteps)
+	return nil
 }
 
-func performRollback(name string, send func(string)) error {
+func performRollback(name string, send func(string), progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
 	installed, err := isInstalledFn(name)
 	if err != nil {
 		return err
@@ -595,13 +653,20 @@ func performRollback(name string, send func(string)) error {
 	if err != nil {
 		return err
 	}
+	totalSteps := max(3, len(manifest[name])+2)
+	step := 0
+	progress("Rollback", step, totalSteps)
 	for containerName, version := range manifest[name] {
 		send(fmt.Sprintf("restored %s to %s", containerName, version.Current))
+		step++
+		progress("Rollback", step, totalSteps)
 	}
 	if err := saveManifestFn(manifest); err != nil {
 		return err
 	}
 	send("restoring previous image tags")
+	step++
+	progress("Rollback", step, totalSteps)
 	if _, err := writeComposeForSuite(name); err != nil {
 		return err
 	}
@@ -610,43 +675,79 @@ func performRollback(name string, send func(string)) error {
 	if err := dockerComposeDownFn(ctx, dockerComposePathFn(name)); err != nil {
 		return err
 	}
-	return dockerComposeUpFn(ctx, dockerComposePathFn(name), true)
-}
-
-func performStart(name string) error {
-	s, err := currentSuiteDefinition(name)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 	if err := dockerComposeUpFn(ctx, dockerComposePathFn(name), true); err != nil {
 		return err
 	}
-	return systemRegisterFn(s)
+	progress("Rollback", totalSteps, totalSteps)
+	return nil
 }
 
-func performStop(name string) error {
+func performStart(name string, progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
 	s, err := currentSuiteDefinition(name)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	progress("Starting", 0, 2)
+	if err := dockerComposeUpFn(ctx, dockerComposePathFn(name), true); err != nil {
+		return err
+	}
+	progress("Starting", 1, 2)
+	if err := systemRegisterFn(s); err != nil {
+		return err
+	}
+	progress("Starting", 2, 2)
+	return nil
+}
+
+func performStop(name string, progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
+	s, err := currentSuiteDefinition(name)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	progress("Stopping", 0, 2)
 	if err := dockerComposeDownFn(ctx, dockerComposePathFn(name)); err != nil {
 		return err
 	}
-	return systemDeregisterFn(s)
-}
-
-func performRestart(name string) error {
-	if err := performStop(name); err != nil {
+	progress("Stopping", 1, 2)
+	if err := systemDeregisterFn(s); err != nil {
 		return err
 	}
-	return performStart(name)
+	progress("Stopping", 2, 2)
+	return nil
 }
 
-func performRemove(name string) error {
+func performRestart(name string, progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
+	if err := performStop(name, func(_ string, step, total int) {
+		progress("Restarting", step, total*2)
+	}); err != nil {
+		return err
+	}
+	return performStart(name, func(_ string, step, total int) {
+		progress("Restarting", total+step, total*2)
+	})
+}
+
+func performRemove(name string, progressFns ...func(string, int, int)) error {
+	progress := func(string, int, int) {}
+	if len(progressFns) > 0 && progressFns[0] != nil {
+		progress = progressFns[0]
+	}
 	installed, err := isInstalledFn(name)
 	if err != nil {
 		return err
@@ -656,13 +757,16 @@ func performRemove(name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	progress("Removing", 0, 4)
 	if err := runComposeRemoveFn(ctx, dockerComposePathFn(name)); err != nil {
 		return err
 	}
+	progress("Removing", 1, 4)
 	_ = os.Remove(dockerComposePathFn(name))
 	if err := removeSuiteFn(name); err != nil {
 		return err
 	}
+	progress("Removing", 2, 4)
 	manifest, err := loadManifestFn()
 	if err != nil {
 		return err
@@ -675,7 +779,12 @@ func performRemove(name string) error {
 	if err != nil {
 		return err
 	}
-	return systemDeregisterFn(s)
+	progress("Removing", 3, 4)
+	if err := systemDeregisterFn(s); err != nil {
+		return err
+	}
+	progress("Removing", 4, 4)
+	return nil
 }
 
 func (m SuitesModel) openShell() tea.Cmd {
@@ -713,4 +822,13 @@ func truncate(text string, limit int) string {
 		return text[:limit]
 	}
 	return text[:limit-1] + "…"
+}
+
+func (m SuitesModel) renderOperationProgress(width int) string {
+	if m.opTotal <= 0 {
+		return ""
+	}
+	ratio := float64(m.opProgress) / float64(max(1, m.opTotal))
+	barWidth := max(16, min(40, width-18))
+	return fmt.Sprintf("%s  %s  %3d%%", m.opLabel, gradientBar(barWidth, ratio, false), int(ratio*100))
 }

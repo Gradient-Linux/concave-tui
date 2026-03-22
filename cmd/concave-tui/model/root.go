@@ -92,10 +92,9 @@ var errForgeSelectionMissing = errors.New("forge has no recorded component selec
 type View int
 
 const (
-	ViewDashboard View = iota
+	ViewWorkspace View = iota
 	ViewSuites
 	ViewLogs
-	ViewWorkspace
 	ViewDoctor
 )
 
@@ -154,7 +153,7 @@ func NewRootModel(version string, cfgs ...tuiconfig.Config) *RootModel {
 		cfg = cfgs[0]
 	}
 	m := &RootModel{
-		activeView: ViewDashboard,
+		activeView: ViewWorkspace,
 		sidebar:    sidebarStateFromConfig(cfg),
 		dashboard:  NewDashboardModel(),
 		suites:     NewSuitesModel(),
@@ -189,16 +188,13 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cfg = msg.Config
 		m.showSettings = false
 		m.settings.SetConfig(m.cfg)
-		m.dashboard.SetConfig(m.cfg)
+		m.workspace.SetConfig(m.cfg)
 		m.applyLayout()
 		return m, saveTUIConfigCmd(m.cfg)
-	case PresetChangedMsg:
-		m.dashboard.SetPreset(msg.PresetName)
-		return m, nil
 	case settingsDiscardedMsg:
 		m.showSettings = false
 		m.settings.SetConfig(m.cfg)
-		m.dashboard.SetConfig(m.cfg)
+		m.workspace.SetConfig(m.cfg)
 		return m, nil
 	}
 
@@ -211,20 +207,18 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.showSettings {
 		var cmd tea.Cmd
 		m.settings, cmd = m.settings.Update(msg)
-		m.dashboard.SetConfig(m.settings.Current())
+		m.workspace.SetConfig(m.settings.Current())
 		return m, cmd
 	}
 
 	var cmd tea.Cmd
 	switch m.activeView {
-	case ViewDashboard:
-		m.dashboard, cmd = m.dashboard.Update(msg)
+	case ViewWorkspace:
+		m.workspace, cmd = m.workspace.Update(msg)
 	case ViewSuites:
 		m.suites, cmd = m.suites.Update(msg)
 	case ViewLogs:
 		m.logs, cmd = m.logs.Update(msg)
-	case ViewWorkspace:
-		m.workspace, cmd = m.workspace.Update(msg)
 	case ViewDoctor:
 		m.doctor, cmd = m.doctor.Update(msg)
 	}
@@ -268,34 +262,21 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		m.showSettings = true
 		m.settings.SetConfig(m.cfg)
-		m.dashboard.SetConfig(m.settings.Current())
+		m.workspace.SetConfig(m.settings.Current())
 		m.applyLayout()
 		return true, nil
 	case "1":
-		return true, m.switchView(ViewDashboard)
+		return true, m.switchView(ViewWorkspace)
 	case "2":
 		return true, m.switchView(ViewSuites)
 	case "3":
 		return true, m.switchView(ViewLogs)
 	case "4":
-		return true, m.switchView(ViewWorkspace)
-	case "5":
 		return true, m.switchView(ViewDoctor)
 	case "tab":
-		return true, m.switchView((m.activeView + 1) % 5)
+		return true, m.switchView(nextVisibleView(m.activeView, 1))
 	case "shift+tab":
-		next := m.activeView - 1
-		if next < 0 {
-			next = ViewDoctor
-		}
-		return true, m.switchView(next)
-	case "p":
-		if m.showSettings {
-			return false, nil
-		}
-		m.cfg.ActivePreset = nextPresetName(m.cfg)
-		m.dashboard.SetConfig(m.cfg)
-		return true, nil
+		return true, m.switchView(nextVisibleView(m.activeView, -1))
 	case "ctrl+b":
 		if m.showSettings {
 			return false, nil
@@ -377,14 +358,12 @@ func (m *RootModel) switchView(next View) tea.Cmd {
 
 func (m *RootModel) deactivateView(view View) {
 	switch view {
-	case ViewDashboard:
-		m.dashboard.Deactivate()
+	case ViewWorkspace:
+		m.workspace.Deactivate()
 	case ViewSuites:
 		m.suites.Deactivate()
 	case ViewLogs:
 		m.logs.Deactivate()
-	case ViewWorkspace:
-		m.workspace.Deactivate()
 	case ViewDoctor:
 		m.doctor.Deactivate()
 	}
@@ -392,14 +371,12 @@ func (m *RootModel) deactivateView(view View) {
 
 func (m *RootModel) activateView(view View) tea.Cmd {
 	switch view {
-	case ViewDashboard:
-		return m.dashboard.Activate()
+	case ViewWorkspace:
+		return m.workspace.Activate()
 	case ViewSuites:
 		return m.suites.Activate()
 	case ViewLogs:
 		return m.logs.Activate()
-	case ViewWorkspace:
-		return m.workspace.Activate()
 	case ViewDoctor:
 		return m.doctor.Activate()
 	default:
@@ -411,13 +388,12 @@ func (m *RootModel) applyConfig(cfg tuiconfig.Config) {
 	m.cfg = cfg
 	m.sidebar = sidebarStateFromConfig(cfg)
 	m.settings.SetConfig(cfg)
-	m.dashboard.SetConfig(cfg)
+	m.workspace.SetConfig(cfg)
 }
 
 func (m *RootModel) applyLayout() {
 	contentWidth := m.contentWidth()
 	contentHeight := m.contentHeight()
-	m.dashboard.SetSize(contentWidth, contentHeight)
 	m.suites.SetSize(contentWidth, contentHeight)
 	m.logs.SetSize(contentWidth, contentHeight)
 	m.workspace.SetSize(contentWidth, contentHeight)
@@ -472,7 +448,7 @@ func (m *RootModel) sidebarView() string {
 	if m.sidebar == SidebarExpanded {
 		lines = append(lines, gradientText("gradient"), "")
 	}
-	for _, view := range []View{ViewDashboard, ViewSuites, ViewLogs, ViewWorkspace, ViewDoctor} {
+	for _, view := range visibleViews() {
 		active := view == m.activeView
 		icon := sidebarIcon(view)
 		label := sidebarLabel(view)
@@ -500,14 +476,12 @@ func (m *RootModel) sidebarView() string {
 
 func (m *RootModel) activeContent() string {
 	switch m.activeView {
-	case ViewDashboard:
-		return m.dashboard.View()
+	case ViewWorkspace:
+		return m.workspace.View()
 	case ViewSuites:
 		return m.suites.View()
 	case ViewLogs:
 		return m.logs.View()
-	case ViewWorkspace:
-		return m.workspace.View()
 	case ViewDoctor:
 		return m.doctor.View()
 	default:
@@ -535,7 +509,7 @@ func (m *RootModel) activeHelp() string {
 		"G              jump to bottom",
 		"ctrl+d / u     scroll half page",
 		"ctrl+f / b     scroll full page",
-		"1-5            switch view",
+		"1-4            switch view",
 		"",
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Actions ("+sidebarLabel(m.activeView)+" view)"),
 	}
@@ -545,7 +519,6 @@ func (m *RootModel) activeHelp() string {
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Global"),
 		"b              toggle sidebar",
 		",              settings",
-		"p              cycle preset",
 		"q              quit",
 		"",
 		"esc / ? / F1   close this overlay",
@@ -555,9 +528,11 @@ func (m *RootModel) activeHelp() string {
 
 func (m *RootModel) activeHelpActions() []string {
 	switch m.activeView {
-	case ViewDashboard:
+	case ViewWorkspace:
 		return []string{
-			"r              refresh dashboard",
+			"b              backup notebooks + models",
+			"x              clean outputs",
+			"r              refresh workspace",
 		}
 	case ViewSuites:
 		return []string{
@@ -575,12 +550,6 @@ func (m *RootModel) activeHelpActions() []string {
 			"/              search logs",
 			"f              resume follow",
 			"n / N          next / previous match",
-		}
-	case ViewWorkspace:
-		return []string{
-			"b              backup notebooks + models",
-			"x              clean outputs",
-			"r              refresh workspace",
 		}
 	case ViewDoctor:
 		return []string{
@@ -604,7 +573,7 @@ func (m *RootModel) headerView() string {
 func (m *RootModel) footerView() string {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ColorMuted)).
-		Render(fmt.Sprintf("%s │ tab next · shift+tab prev · b sidebar · , settings · p presets · F1 help · q quit", m.currentMode()))
+		Render(fmt.Sprintf("%s │ tab next · shift+tab prev · b sidebar · , settings · F1 help · q quit", m.currentMode()))
 }
 
 func (m *RootModel) currentMode() string {
@@ -718,6 +687,10 @@ func sidebarStateFromConfig(cfg tuiconfig.Config) SidebarState {
 	return SidebarExpanded
 }
 
+func visibleViews() []View {
+	return []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor}
+}
+
 func nextPresetName(cfg tuiconfig.Config) string {
 	names := cfg.PresetNames()
 	if len(names) == 0 {
@@ -732,16 +705,33 @@ func nextPresetName(cfg tuiconfig.Config) string {
 	return names[0]
 }
 
+func nextVisibleView(current View, delta int) View {
+	views := visibleViews()
+	if len(views) == 0 {
+		return current
+	}
+	index := 0
+	for idx, view := range views {
+		if view == current {
+			index = idx
+			break
+		}
+	}
+	next := (index + delta) % len(views)
+	if next < 0 {
+		next += len(views)
+	}
+	return views[next]
+}
+
 func sidebarIcon(view View) string {
 	switch view {
-	case ViewDashboard:
-		return "󰕮"
+	case ViewWorkspace:
+		return "󰉋"
 	case ViewSuites:
 		return "󰣘"
 	case ViewLogs:
 		return "󰈙"
-	case ViewWorkspace:
-		return "󰉋"
 	case ViewDoctor:
 		return "󰓙"
 	default:
@@ -751,14 +741,12 @@ func sidebarIcon(view View) string {
 
 func sidebarLabel(view View) string {
 	switch view {
-	case ViewDashboard:
-		return "Dashboard"
+	case ViewWorkspace:
+		return "Workspace"
 	case ViewSuites:
 		return "Suites"
 	case ViewLogs:
 		return "Logs"
-	case ViewWorkspace:
-		return "Workspace"
 	case ViewDoctor:
 		return "Doctor"
 	default:

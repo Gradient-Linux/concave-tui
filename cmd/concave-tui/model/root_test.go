@@ -178,13 +178,14 @@ func TestRootSwitchesViewsAndTogglesChrome(t *testing.T) {
 	}
 }
 
-func TestRootSidebarToggleAndPresetCycle(t *testing.T) {
+func TestRootSidebarToggleFromLogsView(t *testing.T) {
 	restoreModelDeps(t)
 
 	m := NewRootModel("dev", testConfig())
 	m.width = 140
 	m.height = 40
 	m.applyLayout()
+	m.activeView = ViewLogs
 	if m.sidebar != SidebarExpanded {
 		t.Fatalf("sidebar = %v, want expanded", m.sidebar)
 	}
@@ -193,13 +194,6 @@ func TestRootSidebarToggleAndPresetCycle(t *testing.T) {
 	root := updated.(*RootModel)
 	if root.sidebar != SidebarCollapsed {
 		t.Fatalf("sidebar = %v, want collapsed", root.sidebar)
-	}
-
-	current := root.cfg.ActivePreset
-	updated, _ = root.Update(keyRunes("p"))
-	root = updated.(*RootModel)
-	if root.cfg.ActivePreset == current {
-		t.Fatal("expected preset cycle")
 	}
 }
 
@@ -229,29 +223,29 @@ func TestRootSettingsSaveAndDiscard(t *testing.T) {
 
 	updated, _ := m.Update(keyRunes(","))
 	root := updated.(*RootModel)
-	root.settings.current.ActivePreset = "mlops"
+	root.settings.current.Display.SidebarDefault = "collapsed"
 	updated, _ = root.Update(settingsSavedMsg{Config: root.settings.current})
 	root = updated.(*RootModel)
 	if root.showSettings {
 		t.Fatal("expected settings to close on save")
 	}
-	if root.cfg.ActivePreset != "mlops" {
-		t.Fatalf("active preset = %q", root.cfg.ActivePreset)
+	if root.cfg.Display.SidebarDefault != "collapsed" {
+		t.Fatalf("sidebar default = %q", root.cfg.Display.SidebarDefault)
 	}
 	if msg := saveTUIConfigCmd(root.cfg)(); msg.(rootConfigSavedMsg).err != nil {
 		t.Fatalf("saveTUIConfigCmd() error = %v", msg.(rootConfigSavedMsg).err)
 	}
-	if saved.ActivePreset != "mlops" {
-		t.Fatalf("saved preset = %q", saved.ActivePreset)
+	if saved.Display.SidebarDefault != "collapsed" {
+		t.Fatalf("saved sidebar default = %q", saved.Display.SidebarDefault)
 	}
 
 	updated, _ = root.Update(keyRunes(","))
 	root = updated.(*RootModel)
-	root.settings.current.ActivePreset = "training"
+	root.settings.current.Display.SidebarDefault = "expanded"
 	updated, _ = root.Update(settingsDiscardedMsg{})
 	root = updated.(*RootModel)
-	if root.cfg.ActivePreset != "mlops" {
-		t.Fatalf("discard should keep saved config, got %q", root.cfg.ActivePreset)
+	if root.cfg.Display.SidebarDefault != "collapsed" {
+		t.Fatalf("discard should keep saved config, got %q", root.cfg.Display.SidebarDefault)
 	}
 }
 

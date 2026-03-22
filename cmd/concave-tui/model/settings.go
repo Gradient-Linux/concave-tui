@@ -17,7 +17,6 @@ const (
 	settingsFieldHeight
 	settingsFieldRefresh
 	settingsFieldSidebar
-	settingsFieldPreset
 	settingsFieldCount
 )
 
@@ -26,10 +25,6 @@ type settingsSavedMsg struct {
 }
 
 type settingsDiscardedMsg struct{}
-
-type PresetChangedMsg struct {
-	PresetName string
-}
 
 type RadioField struct {
 	Label    string
@@ -92,7 +87,6 @@ type SettingsModel struct {
 	original     tuiconfig.Config
 	graphStyle   RadioField
 	sidebarRadio RadioField
-	presetRadio  RadioField
 	widthInput   textinput.Model
 	heightInput  textinput.Model
 	refreshInput textinput.Model
@@ -146,14 +140,6 @@ func (m *SettingsModel) SetConfig(cfg tuiconfig.Config) {
 	m.original = cfg
 	m.graphStyle.SetValue(cfg.Display.GraphStyle)
 	m.sidebarRadio.SetValue(cfg.Display.SidebarDefault)
-	m.presetRadio = RadioField{
-		Label:   "Dashboard preset",
-		Options: cfg.PresetNames(),
-	}
-	if len(m.presetRadio.Options) == 0 {
-		m.presetRadio.Options = []string{"default"}
-	}
-	m.presetRadio.SetValue(cfg.ActivePreset)
 	m.widthInput.SetValue(strconv.Itoa(cfg.Display.GraphAutoWidthThreshold))
 	m.heightInput.SetValue(strconv.Itoa(cfg.Display.GraphAutoHeightThreshold))
 	m.refreshInput.SetValue(strconv.Itoa(cfg.Display.RefreshIntervalMs))
@@ -200,10 +186,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		case "s":
 			m.syncCurrent()
 			saved := m.current
-			return m, tea.Batch(
-				func() tea.Msg { return settingsSavedMsg{Config: saved} },
-				func() tea.Msg { return PresetChangedMsg{PresetName: saved.ActivePreset} },
-			)
+			return m, func() tea.Msg { return settingsSavedMsg{Config: saved} }
 		case "tab", "j", "down":
 			return m.moveFocus(1)
 		case "shift+tab", "k", "up":
@@ -227,7 +210,6 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 func (m *SettingsModel) syncCurrent() {
 	m.current.Display.GraphStyle = m.graphStyle.Value()
 	m.current.Display.SidebarDefault = m.sidebarRadio.Value()
-	m.current.ActivePreset = m.presetRadio.Value()
 	m.current.Display.GraphAutoWidthThreshold = m.numericValue(m.widthInput.Value(), m.current.Display.GraphAutoWidthThreshold)
 	m.current.Display.GraphAutoHeightThreshold = m.numericValue(m.heightInput.Value(), m.current.Display.GraphAutoHeightThreshold)
 	m.current.Display.RefreshIntervalMs = m.numericValue(m.refreshInput.Value(), m.current.Display.RefreshIntervalMs)
@@ -296,8 +278,6 @@ func (m *SettingsModel) shiftFocusedSelection(delta int) {
 		m.graphStyle.Move(delta)
 	case settingsFieldSidebar:
 		m.sidebarRadio.Move(delta)
-	case settingsFieldPreset:
-		m.presetRadio.Move(delta)
 	default:
 		return
 	}
@@ -319,9 +299,6 @@ func (m SettingsModel) View() string {
 		m.renderNumericRow("Height threshold", m.heightInput, m.focusedField == settingsFieldHeight),
 		m.renderNumericRow("Refresh interval", m.refreshInput, m.focusedField == settingsFieldRefresh),
 		m.sidebarRadio.View(m.focusedField == settingsFieldSidebar),
-		"",
-		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Dashboard Preset"),
-		m.renderPresetRow(),
 	}
 
 	lines = append(lines,
@@ -351,40 +328,4 @@ func (m SettingsModel) renderNumericRow(label string, input textinput.Model, foc
 		value = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Render(value)
 	}
 	return labelStyle.Width(18).Render(label) + " " + value
-}
-
-func (m SettingsModel) presetLabel(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "default":
-		return "Balance view"
-	case "training":
-		return "Training view"
-	case "mlops":
-		return "MLOps view"
-	case "inference":
-		return "Inference view"
-	default:
-		return strings.TrimSpace(name)
-	}
-}
-
-func (m SettingsModel) renderPresetRow() string {
-	parts := make([]string, 0, len(m.presetRadio.Options))
-	for idx, name := range m.presetRadio.Options {
-		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
-		marker := mutedText("○")
-		if idx == m.presetRadio.Selected {
-			marker = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("●")
-		}
-		if m.focusedField == settingsFieldPreset && idx == m.presetRadio.Selected {
-			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
-		}
-		parts = append(parts, marker+" "+labelStyle.Render(m.presetLabel(name)))
-	}
-
-	row := strings.Join(parts, "  ")
-	if m.width <= 0 {
-		return row
-	}
-	return lipgloss.NewStyle().Width(min(m.width-4, 72)).Render(row)
 }
