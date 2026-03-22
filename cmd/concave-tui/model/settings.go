@@ -321,18 +321,7 @@ func (m SettingsModel) View() string {
 		m.sidebarRadio.View(m.focusedField == settingsFieldSidebar),
 		"",
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Dashboard Preset"),
-	}
-
-	for idx, name := range m.presetRadio.Options {
-		marker := mutedText("○")
-		if idx == m.presetRadio.Selected {
-			marker = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("●")
-		}
-		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
-		if m.focusedField == settingsFieldPreset && idx == m.presetRadio.Selected {
-			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
-		}
-		lines = append(lines, "  "+marker+" "+labelStyle.Render(m.presetLabel(name)))
+		m.renderPresetRow(),
 	}
 
 	lines = append(lines,
@@ -377,4 +366,25 @@ func (m SettingsModel) presetLabel(name string) string {
 	default:
 		return strings.TrimSpace(name)
 	}
+}
+
+func (m SettingsModel) renderPresetRow() string {
+	parts := make([]string, 0, len(m.presetRadio.Options))
+	for idx, name := range m.presetRadio.Options {
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
+		marker := mutedText("○")
+		if idx == m.presetRadio.Selected {
+			marker = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("●")
+		}
+		if m.focusedField == settingsFieldPreset && idx == m.presetRadio.Selected {
+			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
+		}
+		parts = append(parts, marker+" "+labelStyle.Render(m.presetLabel(name)))
+	}
+
+	row := strings.Join(parts, "  ")
+	if m.width <= 0 {
+		return row
+	}
+	return lipgloss.NewStyle().Width(min(m.width-4, 72)).Render(row)
 }

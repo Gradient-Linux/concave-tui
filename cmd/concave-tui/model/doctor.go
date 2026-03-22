@@ -107,19 +107,20 @@ func (m DoctorModel) View() string {
 func (m DoctorModel) HelpView() string { return "Doctor\nr re-run checks" }
 
 func renderDoctorBlock(prefix, name, detail, recovery string, totalWidth int) []string {
-	nameWidth := 18
+	nameWidth := max(10, min(18, totalWidth/4))
 	if totalWidth < 60 {
-		nameWidth = 14
+		nameWidth = min(nameWidth, 14)
 	}
 	if totalWidth < 48 {
-		nameWidth = 12
+		nameWidth = min(nameWidth, 12)
 	}
 	detailWidth := max(12, totalWidth-nameWidth-4)
 	wrapped := strings.Split(lipgloss.NewStyle().Width(detailWidth).Render(detail), "\n")
 	lines := make([]string, 0, len(wrapped)+2)
+	nameLabel := truncate(name, nameWidth)
 	for idx, part := range wrapped {
 		if idx == 0 {
-			lines = append(lines, fmt.Sprintf("%s  %-*s %s", prefix, nameWidth, name, part))
+			lines = append(lines, fmt.Sprintf("%s  %-*s %s", prefix, nameWidth, nameLabel, part))
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%s  %-*s %s", " ", nameWidth, "", part))

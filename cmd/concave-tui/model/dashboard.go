@@ -199,16 +199,7 @@ func (m DashboardModel) View() string {
 		return mutedText("No dashboard widgets configured for the active preset")
 	}
 
-	layout := m.layoutWidgets(widgets, m.width, m.height, style)
-	rendered := make([]string, 0, len(layout))
-	for _, items := range layout {
-		columnParts := make([]string, 0, len(items))
-		for _, item := range items {
-			columnParts = append(columnParts, item.content)
-		}
-		rendered = append(rendered, strings.Join(columnParts, "\n"))
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
+	return padToHeight(m.layoutWidgets(widgets, m.width, m.height, style), m.height)
 }
 
 func (m DashboardModel) HelpView() string {
@@ -299,41 +290,36 @@ func (m DashboardModel) widgetByID(id string) (Widget, bool) {
 
 func (m DashboardModel) renderWidgetCard(widget Widget, width, height int, style string) string {
 	bodyHeight := max(3, height-3)
-	body := widget.Render(width-4, bodyHeight, style)
+	body := padToHeight(widget.Render(width-4, bodyHeight, style), bodyHeight)
 	card := lipgloss.NewStyle().
 		Width(width).
+		Height(height).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(ColorDeep)).
 		Padding(0, 1)
-	if widgetExpandable(widget.ID()) {
-		body = padToHeight(body, bodyHeight)
-		card = card.Height(height)
-	}
 	return card.Render(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(widget.Title()) + "\n" + body)
 }
 
-func (m DashboardModel) layoutWidgets(widgets []Widget, contentWidth, contentHeight int, style string) [][]renderedWidget {
+func (m DashboardModel) layoutWidgets(widgets []Widget, contentWidth, contentHeight int, style string) string {
 	if len(widgets) == 0 {
-		return nil
+		return ""
 	}
 	columns := min(dashboardColumnsForWidth(contentWidth), len(widgets))
-	columnWidth := max(22, (contentWidth-(columns-1)*2)/columns)
-	buckets := make([][]Widget, columns)
-	for idx, widget := range widgets {
-		buckets[idx%columns] = append(buckets[idx%columns], widget)
+	if columns <= 0 {
+		return ""
 	}
-
-	result := make([][]renderedWidget, columns)
-	for idx, bucket := range buckets {
-		heights := distributeHeight(bucket, contentHeight)
-		for itemIdx, widget := range bucket {
-			result[idx] = append(result[idx], renderedWidget{
-				content: m.renderWidgetCard(widget, columnWidth, heights[itemIdx], style),
-				height:  heights[itemIdx],
-			})
+	rows := chunkWidgets(widgets, columns)
+	rowHeights := distributeRowHeights(rows, contentHeight)
+	renderedRows := make([]string, 0, len(rows))
+	for rowIdx, row := range rows {
+		cardWidth := rowCardWidth(contentWidth, len(row))
+		cards := make([]string, 0, len(row))
+		for _, widget := range row {
+			cards = append(cards, m.renderWidgetCard(widget, cardWidth, rowHeights[rowIdx], style))
 		}
+		renderedRows = append(renderedRows, joinHorizontalCards(cards, rowHeights[rowIdx]))
 	}
-	return result
+	return strings.Join(renderedRows, "\n")
 }
 
 func (m DashboardModel) renderGPUWidget(index, width, height int, style string) string {
@@ -624,47 +610,107 @@ func dashboardColumnsForWidth(width int) int {
 	}
 }
 
-func distributeHeight(widgets []Widget, contentHeight int) []int {
-	if len(widgets) == 0 {
+func chunkWidgets(widgets []Widget, columns int) [][]Widget {
+	if len(widgets) == 0 || columns <= 0 {
+		return nil
+	}
+	rows := make([][]Widget, 0, (len(widgets)+columns-1)/columns)
+	for start := 0; start < len(widgets); start += columns {
+		end := min(len(widgets), start+columns)
+		row := make([]Widget, 0, end-start)
+		row = append(row, widgets[start:end]...)
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func distributeRowHeights(rows [][]Widget, contentHeight int) []int {
+	if len(rows) == 0 {
 		return nil
 	}
 
-	gaps := max(0, len(widgets)-1)
-	available := max(len(widgets)*4, contentHeight-gaps)
-	heights := make([]int, len(widgets))
-	totalMin := 0
-	expandable := make([]int, 0, len(widgets))
-
-	for idx, widget := range widgets {
-		minHeight := widgetMinHeight(widget.ID())
-		heights[idx] = minHeight
-		totalMin += minHeight
-		if widgetExpandable(widget.ID()) {
-			expandable = append(expandable, idx)
-		}
+	rowGaps := max(0, len(rows)-1)
+	available := max(len(rows)*4, contentHeight-rowGaps)
+	preferred := make([]int, len(rows))
+	weights := make([]int, len(rows))
+	totalPreferred := 0
+	totalWeight := 0
+	for idx, row := range rows {
+		preferred[idx] = rowPreferredHeight(row)
+		weights[idx] = rowWeight(row)
+		totalPreferred += preferred[idx]
+		totalWeight += weights[idx]
 	}
 
-	if len(expandable) == 0 {
+	if totalPreferred > available {
+		return evenHeights(available, len(rows))
+	}
+
+	heights := append([]int(nil), preferred...)
+	remaining := available - totalPreferred
+	if remaining <= 0 || totalWeight <= 0 {
 		return heights
 	}
 
-	remaining := available - totalMin
-	if remaining <= 0 {
-		return heights
+	remainders := make([]int, len(rows))
+	for idx := range rows {
+		product := remaining * weights[idx]
+		heights[idx] += product / totalWeight
+		remainders[idx] = product % totalWeight
 	}
-	share := 0
-	extra := 0
-	if len(expandable) > 0 {
-		share = remaining / len(expandable)
-		extra = remaining % len(expandable)
-	}
-	for idx, widgetIdx := range expandable {
-		heights[widgetIdx] += share
-		if idx < extra {
-			heights[widgetIdx]++
+
+	for assigned := sumInts(heights) - totalPreferred; assigned < remaining; assigned++ {
+		bestIdx := -1
+		bestRemainder := -1
+		for idx, remainder := range remainders {
+			if remainder > bestRemainder {
+				bestIdx = idx
+				bestRemainder = remainder
+			}
 		}
+		if bestIdx < 0 {
+			break
+		}
+		heights[bestIdx]++
+		remainders[bestIdx] = -1
 	}
 	return heights
+}
+
+func rowCardWidth(contentWidth, cards int) int {
+	if cards <= 0 {
+		return contentWidth
+	}
+	gaps := max(0, cards-1)
+	return max(22, (contentWidth-gaps)/cards)
+}
+
+func rowPreferredHeight(row []Widget) int {
+	height := 4
+	for _, widget := range row {
+		height = max(height, widgetMinHeight(widget.ID()))
+	}
+	return height
+}
+
+func rowWeight(row []Widget) int {
+	weight := 1
+	for _, widget := range row {
+		weight = max(weight, widgetWeight(widget.ID()))
+	}
+	return weight
+}
+
+func joinHorizontalCards(cards []string, height int) string {
+	if len(cards) == 0 {
+		return ""
+	}
+	row := cards[0]
+	gap := lipgloss.NewStyle().Width(1).Height(height).Render("")
+	for _, card := range cards[1:] {
+		row = lipgloss.JoinHorizontal(lipgloss.Top, row, gap, card)
+	}
+	return row
 }
 
 func evenHeights(total, count int) []int {
@@ -686,15 +732,6 @@ func evenHeights(total, count int) []int {
 	return heights
 }
 
-func widgetExpandable(id string) bool {
-	switch id {
-	case "gpu-graph", "gpu-graph-2":
-		return true
-	default:
-		return false
-	}
-}
-
 func widgetMinHeight(id string) int {
 	switch id {
 	case "gpu-graph", "gpu-graph-2":
@@ -708,6 +745,29 @@ func widgetMinHeight(id string) int {
 	default:
 		return 5
 	}
+}
+
+func widgetWeight(id string) int {
+	switch id {
+	case "gpu-graph", "gpu-graph-2":
+		return 4
+	case "suite-status", "flow-services", "neural-containers":
+		return 3
+	case "system-health", "port-map":
+		return 2
+	case "vram-bar", "ram-bar":
+		return 1
+	default:
+		return 1
+	}
+}
+
+func sumInts(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
 }
 
 func renderLabeledBlock(label, detail string, totalWidth int) []string {

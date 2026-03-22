@@ -165,23 +165,23 @@ func TestDashboardLayoutAssignsHeightsAndActivationKeepsSnapshot(t *testing.T) {
 	}
 	m.appendHistory(m.metrics.GPUs)
 
-	layout := m.layoutWidgets(m.widgets(), m.width, m.height, "bar")
-	if len(layout) == 0 {
-		t.Fatal("expected widget layout")
+	rows := chunkWidgets(m.widgets(), dashboardColumnsForWidth(m.width))
+	if len(rows) == 0 {
+		t.Fatal("expected dashboard rows")
 	}
-	hasTall := false
-	for _, column := range layout {
-		for _, item := range column {
-			if item.height < 4 {
-				t.Fatalf("widget height = %d, want at least 4", item.height)
-			}
-			if item.height > 10 {
-				hasTall = true
-			}
+	heights := distributeRowHeights(rows, m.height)
+	total := 0
+	for _, height := range heights {
+		if height < 4 {
+			t.Fatalf("row height = %d, want at least 4", height)
 		}
+		total += height
 	}
-	if !hasTall {
-		t.Fatal("expected at least one expanded dashboard widget")
+	if total < m.height-2 {
+		t.Fatalf("row heights = %v, want near full dashboard height %d", heights, m.height)
+	}
+	if layout := m.layoutWidgets(m.widgets(), m.width, m.height, "bar"); layout == "" {
+		t.Fatal("expected rendered dashboard layout")
 	}
 	if cmd := m.Activate(); cmd == nil {
 		t.Fatal("expected tick command on activate")
