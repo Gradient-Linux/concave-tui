@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -62,15 +61,12 @@ func restoreModelDeps(t *testing.T) {
 	oldWorkspaceStatus := workspaceStatusFn
 	oldWorkspaceBackup := workspaceBackupFn
 	oldWorkspaceClean := workspaceCleanFn
+	oldWorkspaceReadMem := workspaceReadMemFn
+	oldWorkspaceGPUStats := workspaceGPUStatsFn
+	oldWorkspaceReadCPU := workspaceReadCPUSnapshotFn
 	oldGPUDetect := gpuDetectFn
 	oldGPURecommended := gpuRecommendedFn
 	oldGPUToolkit := gpuToolkitFn
-	oldDashboardGPUStats := dashboardGPUStatsFn
-	oldDashboardCUDA := dashboardCUDAFn
-	oldDashboardReadMem := dashboardReadMemFn
-	oldDashboardTickNow := dashboardTickNowFn
-	oldDashboardDocker := dashboardSystemDocker
-	oldDashboardInternet := dashboardInternetFn
 	oldDoctorGPUStats := doctorGPUStatsFn
 	oldDoctorCUDA := doctorCUDAFn
 	oldRunComposeRemove := runComposeRemoveFn
@@ -118,15 +114,12 @@ func restoreModelDeps(t *testing.T) {
 		workspaceStatusFn = oldWorkspaceStatus
 		workspaceBackupFn = oldWorkspaceBackup
 		workspaceCleanFn = oldWorkspaceClean
+		workspaceReadMemFn = oldWorkspaceReadMem
+		workspaceGPUStatsFn = oldWorkspaceGPUStats
+		workspaceReadCPUSnapshotFn = oldWorkspaceReadCPU
 		gpuDetectFn = oldGPUDetect
 		gpuRecommendedFn = oldGPURecommended
 		gpuToolkitFn = oldGPUToolkit
-		dashboardGPUStatsFn = oldDashboardGPUStats
-		dashboardCUDAFn = oldDashboardCUDA
-		dashboardReadMemFn = oldDashboardReadMem
-		dashboardTickNowFn = oldDashboardTickNow
-		dashboardSystemDocker = oldDashboardDocker
-		dashboardInternetFn = oldDashboardInternet
 		doctorGPUStatsFn = oldDoctorGPUStats
 		doctorCUDAFn = oldDoctorCUDA
 		runComposeRemoveFn = oldRunComposeRemove
@@ -262,11 +255,11 @@ func TestRootRendersCenteredModalAndModeIndicator(t *testing.T) {
 	if !strings.Contains(view, "Settings") {
 		t.Fatalf("expected settings modal in view, got %q", view)
 	}
-	if !strings.Contains(view, "NORMAL") {
-		t.Fatalf("expected normal mode footer, got %q", view)
+	if !strings.Contains(view, "INSERT") {
+		t.Fatalf("expected insert mode footer while settings numeric input is focused, got %q", view)
 	}
 
-	m.settings.focusedField = settingsFieldWidth
+	m.settings.focusedField = settingsFieldRefresh
 	m.settings.insertMode = true
 	if !strings.Contains(m.footerView(), "INSERT") {
 		t.Fatalf("expected insert mode indicator, got %q", m.footerView())
@@ -352,24 +345,34 @@ func TestRootUsesWorkspaceAndGPUHelpers(t *testing.T) {
 
 	tmp := t.TempDir()
 	workspaceRootFn = func() string { return tmp }
-	loadStateFn = func() (cfgstore.State, error) { return cfgstore.State{Installed: []string{}}, nil }
 	workspaceEnsureFn = func() error { return nil }
 	workspaceStatusFn = func() ([]workspace.Usage, error) {
 		return []workspace.Usage{{Name: "models", Bytes: 2048}}, nil
 	}
 	gpuDetectFn = func() (gpu.GPUState, error) { return gpu.GPUStateNone, nil }
-	dashboardGPUStatsFn = func() ([]gpu.NVIDIADevice, error) { return nil, nil }
-	dashboardCUDAFn = func() (string, error) { return "", nil }
-	dashboardReadMemFn = func() (uint64, uint64, error) { return 1024, 2048, nil }
-	dashboardTickNowFn = func() time.Time { return time.Unix(100, 0) }
-	dashboardSystemDocker = func() (bool, error) { return true, nil }
-	dashboardInternetFn = func() (bool, error) { return true, nil }
-
-	msg := loadDashboardCmd(1)().(dashboardLoadedMsg)
-	if msg.loadErr != nil {
-		t.Fatalf("loadDashboardCmd() error = %v", msg.loadErr)
+	workspaceReadMemFn = func() (uint64, uint64, error) { return 1024, 2048, nil }
+	workspaceGPUStatsFn = func() ([]gpu.NVIDIADevice, error) { return nil, nil }
+	workspaceReadCPUSnapshotFn = func() (cpuSnapshot, error) {
+		return cpuSnapshot{
+			total: cpuTotals{total: 100, idle: 40},
+			cores: []cpuTotals{
+				{total: 100, idle: 30},
+				{total: 100, idle: 50},
+			},
+		}, nil
 	}
-	if len(msg.metrics.Suites) != len(viewOrder) {
-		t.Fatalf("suite count = %d, want %d", len(msg.metrics.Suites), len(viewOrder))
+
+	msg := loadWorkspaceCmd(1)().(workspaceLoadedMsg)
+	if msg.loadErr != nil {
+		t.Fatalf("loadWorkspaceCmd() error = %v", msg.loadErr)
+	}
+	if msg.root != tmp {
+		t.Fatalf("root = %q, want %q", msg.root, tmp)
+	}
+	if msg.ramUsedBytes != 1024 || msg.ramTotalBytes != 2048 {
+		t.Fatalf("ram = %d/%d", msg.ramUsedBytes, msg.ramTotalBytes)
+	}
+	if len(msg.coreUsage) != 2 {
+		t.Fatalf("core usage count = %d", len(msg.coreUsage))
 	}
 }

@@ -112,7 +112,6 @@ type rootConfigSavedMsg struct {
 type RootModel struct {
 	activeView   View
 	sidebar      SidebarState
-	dashboard    DashboardModel
 	suites       SuitesModel
 	logs         LogsModel
 	workspace    WorkspaceModel
@@ -155,7 +154,6 @@ func NewRootModel(version string, cfgs ...tuiconfig.Config) *RootModel {
 	m := &RootModel{
 		activeView: ViewWorkspace,
 		sidebar:    sidebarStateFromConfig(cfg),
-		dashboard:  NewDashboardModel(),
 		suites:     NewSuitesModel(),
 		logs:       NewLogsModel(),
 		workspace:  NewWorkspaceModel(),
@@ -446,7 +444,7 @@ func (m *RootModel) contentView() string {
 func (m *RootModel) sidebarView() string {
 	lines := make([]string, 0, 7)
 	if m.sidebar == SidebarExpanded {
-		lines = append(lines, gradientText("gradient"), "")
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("concave-tui dev"), "")
 	}
 	for _, view := range visibleViews() {
 		active := view == m.activeView
@@ -561,7 +559,7 @@ func (m *RootModel) activeHelpActions() []string {
 }
 
 func (m *RootModel) headerView() string {
-	wordmark := gradientText("gradient linux")
+	wordmark := gradientText("concave tui")
 	version := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render("concave-tui " + m.version)
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
@@ -796,6 +794,41 @@ func gradientBar(width int, fillRatio float64, styleThreshold bool) string {
 			}
 		}
 		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("█"))
+	}
+	if width-filled > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render(strings.Repeat("░", width-filled)))
+	}
+	return strings.Join(parts, "")
+}
+
+func utilizationBar(width int, fillRatio float64, styleThreshold bool) string {
+	if width <= 0 {
+		return ""
+	}
+	if fillRatio < 0 {
+		fillRatio = 0
+	}
+	if fillRatio > 1 {
+		fillRatio = 1
+	}
+	filled := int(math.Round(fillRatio * float64(width)))
+	if filled > width {
+		filled = width
+	}
+
+	color := interpolateHex(ColorDeep, ColorGold, fillRatio)
+	if styleThreshold {
+		switch {
+		case fillRatio >= 0.95:
+			color = ColorError
+		case fillRatio >= 0.80:
+			color = ColorWarn
+		}
+	}
+
+	parts := make([]string, 0, 2)
+	if filled > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(strings.Repeat("█", filled)))
 	}
 	if width-filled > 0 {
 		parts = append(parts, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted)).Render(strings.Repeat("░", width-filled)))

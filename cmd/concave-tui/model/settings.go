@@ -12,10 +12,7 @@ import (
 )
 
 const (
-	settingsFieldGraphStyle = iota
-	settingsFieldWidth
-	settingsFieldHeight
-	settingsFieldRefresh
+	settingsFieldRefresh = iota
 	settingsFieldSidebar
 	settingsFieldCount
 )
@@ -85,10 +82,7 @@ type SettingsModel struct {
 	height       int
 	current      tuiconfig.Config
 	original     tuiconfig.Config
-	graphStyle   RadioField
 	sidebarRadio RadioField
-	widthInput   textinput.Model
-	heightInput  textinput.Model
 	refreshInput textinput.Model
 	focusedField int
 	insertMode   bool
@@ -96,16 +90,10 @@ type SettingsModel struct {
 
 func NewSettingsModel(cfg tuiconfig.Config) SettingsModel {
 	m := SettingsModel{
-		graphStyle: RadioField{
-			Label:   "Graph style",
-			Options: []string{"line", "bar", "auto"},
-		},
 		sidebarRadio: RadioField{
 			Label:   "Sidebar default",
 			Options: []string{"expanded", "collapsed"},
 		},
-		widthInput:   newNumericInput(),
-		heightInput:  newNumericInput(),
 		refreshInput: newNumericInput(),
 	}
 	m.SetConfig(cfg)
@@ -138,14 +126,11 @@ func (m *SettingsModel) SetSize(width, height int) {
 func (m *SettingsModel) SetConfig(cfg tuiconfig.Config) {
 	m.current = cfg
 	m.original = cfg
-	m.graphStyle.SetValue(cfg.Display.GraphStyle)
 	m.sidebarRadio.SetValue(cfg.Display.SidebarDefault)
-	m.widthInput.SetValue(strconv.Itoa(cfg.Display.GraphAutoWidthThreshold))
-	m.heightInput.SetValue(strconv.Itoa(cfg.Display.GraphAutoHeightThreshold))
 	m.refreshInput.SetValue(strconv.Itoa(cfg.Display.RefreshIntervalMs))
-	m.focusedField = settingsFieldGraphStyle
-	m.insertMode = false
-	m.blurInputs()
+	m.focusedField = settingsFieldRefresh
+	m.insertMode = true
+	m.applyFocus()
 }
 
 func (m SettingsModel) Current() tuiconfig.Config {
@@ -208,10 +193,7 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 }
 
 func (m *SettingsModel) syncCurrent() {
-	m.current.Display.GraphStyle = m.graphStyle.Value()
 	m.current.Display.SidebarDefault = m.sidebarRadio.Value()
-	m.current.Display.GraphAutoWidthThreshold = m.numericValue(m.widthInput.Value(), m.current.Display.GraphAutoWidthThreshold)
-	m.current.Display.GraphAutoHeightThreshold = m.numericValue(m.heightInput.Value(), m.current.Display.GraphAutoHeightThreshold)
 	m.current.Display.RefreshIntervalMs = m.numericValue(m.refreshInput.Value(), m.current.Display.RefreshIntervalMs)
 }
 
@@ -230,42 +212,24 @@ func (m SettingsModel) moveFocus(delta int) (SettingsModel, tea.Cmd) {
 }
 
 func (m *SettingsModel) blurInputs() {
-	m.widthInput.Blur()
-	m.heightInput.Blur()
 	m.refreshInput.Blur()
 }
 
 func (m *SettingsModel) applyFocus() tea.Cmd {
 	m.blurInputs()
-	switch m.focusedField {
-	case settingsFieldWidth:
-		return m.widthInput.Focus()
-	case settingsFieldHeight:
-		return m.heightInput.Focus()
-	case settingsFieldRefresh:
+	if m.focusedField == settingsFieldRefresh {
 		return m.refreshInput.Focus()
-	default:
-		return nil
 	}
+	return nil
 }
 
 func (m SettingsModel) isNumericField(index int) bool {
-	switch index {
-	case settingsFieldWidth, settingsFieldHeight, settingsFieldRefresh:
-		return true
-	default:
-		return false
-	}
+	return index == settingsFieldRefresh
 }
 
 func (m SettingsModel) updateFocusedInput(msg tea.Msg) (SettingsModel, tea.Cmd) {
 	var cmd tea.Cmd
-	switch m.focusedField {
-	case settingsFieldWidth:
-		m.widthInput, cmd = m.widthInput.Update(msg)
-	case settingsFieldHeight:
-		m.heightInput, cmd = m.heightInput.Update(msg)
-	case settingsFieldRefresh:
+	if m.focusedField == settingsFieldRefresh {
 		m.refreshInput, cmd = m.refreshInput.Update(msg)
 	}
 	m.syncCurrent()
@@ -273,13 +237,8 @@ func (m SettingsModel) updateFocusedInput(msg tea.Msg) (SettingsModel, tea.Cmd) 
 }
 
 func (m *SettingsModel) shiftFocusedSelection(delta int) {
-	switch m.focusedField {
-	case settingsFieldGraphStyle:
-		m.graphStyle.Move(delta)
-	case settingsFieldSidebar:
+	if m.focusedField == settingsFieldSidebar {
 		m.sidebarRadio.Move(delta)
-	default:
-		return
 	}
 	m.syncCurrent()
 }
@@ -294,17 +253,11 @@ func (m SettingsModel) View() string {
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Settings"),
 		"",
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Display"),
-		m.graphStyle.View(m.focusedField == settingsFieldGraphStyle),
-		m.renderNumericRow("Width threshold", m.widthInput, m.focusedField == settingsFieldWidth),
-		m.renderNumericRow("Height threshold", m.heightInput, m.focusedField == settingsFieldHeight),
 		m.renderNumericRow("Refresh interval", m.refreshInput, m.focusedField == settingsFieldRefresh),
 		m.sidebarRadio.View(m.focusedField == settingsFieldSidebar),
-	}
-
-	lines = append(lines,
 		"",
 		mutedText("[s] save and close        [esc] discard changes"),
-	)
+	}
 
 	body := strings.Join(lines, "\n")
 	return lipgloss.NewStyle().
@@ -320,12 +273,9 @@ func (m SettingsModel) renderNumericRow(label string, input textinput.Model, foc
 	if focused {
 		labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
 	}
-
-	value := input.View()
-	if !focused {
-		value = mutedText(input.Value())
-	} else {
-		value = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Render(value)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ColorMuted))
+	if focused {
+		valueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold))
 	}
-	return labelStyle.Width(18).Render(label) + " " + value
+	return labelStyle.Render(label) + "   " + valueStyle.Render(input.View()) + mutedText(" ms")
 }

@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NimbleMarkets/ntcharts/linechart/timeserieslinechart"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -65,7 +64,6 @@ var (
 	workspaceGPUDetectFn       = gpu.Detect
 	workspaceGPUStatsFn        = gpu.NVIDIADevices
 	workspaceReadCPUSnapshotFn = readCPUSnapshot
-	workspaceNowFn             = time.Now
 )
 
 type WorkspaceModel struct {
@@ -93,8 +91,6 @@ type WorkspaceModel struct {
 	cpuUsage      float64
 	coreUsage     []float64
 	cpuSnapshot   cpuSnapshot
-	cpuHistory    []float64
-	gpuHistory    []float64
 }
 
 func NewWorkspaceModel() WorkspaceModel {
@@ -176,7 +172,6 @@ func (m WorkspaceModel) Update(msg tea.Msg) (WorkspaceModel, tea.Cmd) {
 		m.coreUsage = msg.coreUsage
 		m.cpuSnapshot = msg.snapshot
 		m.lastErr = msg.loadErr
-		m.appendHistory()
 	case workspaceTickMsg:
 		if !m.active || msg.token != m.loadToken {
 			return m, nil
@@ -207,12 +202,11 @@ func (m WorkspaceModel) View() string {
 		return errorText(m.lastErr.Error())
 	}
 
-	style := tuiconfig.ResolveGraphStyle(m.cfg, m.width, m.height)
 	lines := []string{
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(m.root),
 		fmt.Sprintf("Disk  %s  %s free / %s (%.0f%% used)", m.totalBar(), humanBytes(m.total-m.used), humanBytes(m.total), m.usedRatio()*100),
 		"",
-		m.renderHardwareOverview(style),
+		m.renderHardwareOverview(),
 		"",
 		m.renderWorkspaceUsage(),
 		"",
@@ -232,37 +226,20 @@ func (m WorkspaceModel) refreshInterval() time.Duration {
 	return time.Duration(m.cfg.Display.RefreshIntervalMs) * time.Millisecond
 }
 
-func (m *WorkspaceModel) appendHistory() {
-	m.cpuHistory = appendHistory(m.cpuHistory, m.cpuUsage)
-	if len(m.gpuDevices) > 0 {
-		m.gpuHistory = appendHistory(m.gpuHistory, float64(m.gpuDevices[0].Utilization))
-	} else {
-		m.gpuHistory = appendHistory(m.gpuHistory, 0)
-	}
-}
-
-func appendHistory(history []float64, value float64) []float64 {
-	history = append(history, value)
-	if len(history) > 60 {
-		history = history[len(history)-60:]
-	}
-	return history
-}
-
-func (m WorkspaceModel) renderHardwareOverview(style string) string {
+func (m WorkspaceModel) renderHardwareOverview() string {
 	chartHeight := max(8, min(12, m.height/4))
 	if m.width >= 110 {
 		leftWidth := max(32, (m.width-2)/2)
 		rightWidth := max(32, m.width-leftWidth-2)
-		left := m.renderMetricPanel("GPU", m.renderGPUChart(leftWidth-4, chartHeight-3, style), leftWidth, chartHeight)
-		right := m.renderMetricPanel("CPU", m.renderCPUChart(rightWidth-4, chartHeight-3, style), rightWidth, chartHeight)
+		left := m.renderMetricPanel("GPU", m.renderGPUChart(leftWidth-4, chartHeight-3), leftWidth, chartHeight)
+		right := m.renderMetricPanel("CPU", m.renderCPUChart(rightWidth-4, chartHeight-3), rightWidth, chartHeight)
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right) + "\n\n" + m.renderSystemBars()
 	}
 
 	return strings.Join([]string{
-		m.renderMetricPanel("GPU", m.renderGPUChart(m.width-4, chartHeight-3, style), m.width, chartHeight),
+		m.renderMetricPanel("GPU", m.renderGPUChart(m.width-4, chartHeight-3), m.width, chartHeight),
 		"",
-		m.renderMetricPanel("CPU", m.renderCPUChart(m.width-4, chartHeight-3, style), m.width, chartHeight),
+		m.renderMetricPanel("CPU", m.renderCPUChart(m.width-4, chartHeight-3), m.width, chartHeight),
 		"",
 		m.renderSystemBars(),
 	}, "\n")
@@ -279,7 +256,8 @@ func (m WorkspaceModel) renderMetricPanel(title, body string, width, height int)
 		Render(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(title) + "\n" + padToHeight(body, bodyHeight))
 }
 
-func (m WorkspaceModel) renderGPUChart(width, height int, style string) string {
+func (m WorkspaceModel) renderGPUChart(width, height int) string {
+	_ = height
 	switch m.gpuState {
 	case gpu.GPUStateNone:
 		return warnText("GPU not detected · CPU-only mode")
@@ -290,33 +268,12 @@ func (m WorkspaceModel) renderGPUChart(width, height int, style string) string {
 		return mutedText("No NVIDIA telemetry available")
 	}
 	device := m.gpuDevices[0]
-	if style == "bar" || len(m.gpuHistory) < 2 {
-		return fmt.Sprintf("%s  %d%%\n%s", truncate(device.Name, max(16, width-8)), device.Utilization, gradientBar(max(16, width-6), float64(device.Utilization)/100, false))
-	}
-	return fmt.Sprintf("%s  %d%%\n%s", truncate(device.Name, max(16, width-8)), device.Utilization, renderHistoryChart(m.gpuHistory, width, height))
+	return fmt.Sprintf("%s  %d%%\n%s", truncate(device.Name, max(16, width-8)), device.Utilization, utilizationBar(max(16, width-6), float64(device.Utilization)/100, false))
 }
 
-func (m WorkspaceModel) renderCPUChart(width, height int, style string) string {
-	if style == "bar" || len(m.cpuHistory) < 2 {
-		return fmt.Sprintf("Total CPU  %.0f%%\n%s", m.cpuUsage, gradientBar(max(16, width-6), m.cpuUsage/100, false))
-	}
-	return fmt.Sprintf("Total CPU  %.0f%%\n%s", m.cpuUsage, renderHistoryChart(m.cpuHistory, width, height))
-}
-
-func renderHistoryChart(history []float64, width, height int) string {
-	now := workspaceNowFn()
-	start := now.Add(-time.Duration(len(history)-1) * time.Second)
-	chart := timeserieslinechart.New(max(20, width), max(5, height))
-	chart.SetViewTimeAndYRange(start, now, 0, 100)
-	chart.SetStyle(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)))
-	for offset, value := range history {
-		chart.Push(timeserieslinechart.TimePoint{
-			Time:  now.Add(-time.Duration(len(history)-1-offset) * time.Second),
-			Value: value,
-		})
-	}
-	chart.DrawBraille()
-	return chart.View()
+func (m WorkspaceModel) renderCPUChart(width, height int) string {
+	_ = height
+	return fmt.Sprintf("Total CPU  %.0f%%\n%s", m.cpuUsage, utilizationBar(max(16, width-6), m.cpuUsage/100, false))
 }
 
 func (m WorkspaceModel) renderSystemBars() string {
@@ -337,7 +294,7 @@ func renderUsageBarLine(label string, used, total uint64, width int) string {
 		return fmt.Sprintf("%-5s %s", label, mutedText("data unavailable"))
 	}
 	ratio := float64(used) / float64(total)
-	return fmt.Sprintf("%-5s %s / %s  %s  %.0f%%", label, humanBytes(used), humanBytes(total), gradientBar(max(14, min(36, width)), ratio, true), ratio*100)
+	return fmt.Sprintf("%-5s %s / %s  %s  %.0f%%", label, humanBytes(used), humanBytes(total), utilizationBar(max(14, min(36, width)), ratio, false), ratio*100)
 }
 
 func (m WorkspaceModel) renderCoreBars() []string {
@@ -399,7 +356,7 @@ func joinColumns(columns []string) []string {
 
 func renderCoreBar(index int, value float64, width int) string {
 	barWidth := max(10, width-14)
-	return fmt.Sprintf("cpu%02d %s %3.0f%%", index, gradientBar(barWidth, value/100, false), value)
+	return fmt.Sprintf("cpu%02d %s %3.0f%%", index, utilizationBar(barWidth, value/100, false), value)
 }
 
 func (m WorkspaceModel) renderWorkspaceUsage() string {
