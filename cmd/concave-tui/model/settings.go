@@ -332,7 +332,7 @@ func (m SettingsModel) View() string {
 		if m.focusedField == settingsFieldPreset && idx == m.presetRadio.Selected {
 			labelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true)
 		}
-		lines = append(lines, "  "+marker+" "+labelStyle.Render(name)+"      "+mutedText(m.presetDescription(name)))
+		lines = append(lines, "  "+marker+" "+labelStyle.Render(m.presetLabel(name)))
 	}
 
 	lines = append(lines,
@@ -370,11 +370,14 @@ func (m SettingsModel) renderNumericRow(label string, input textinput.Model, foc
 	return labelStyle.Width(18).Render(label) + " " + inputStyle.Render(value)
 }
 
-func (m SettingsModel) presetDescription(name string) string {
+func (m SettingsModel) presetLabel(name string) string {
 	for _, preset := range m.current.Presets {
 		if preset.Name == name {
-			return preset.Description
+			if strings.TrimSpace(preset.Description) != "" {
+				return preset.Description
+			}
+			return preset.Name
 		}
 	}
-	return ""
+	return name
 }

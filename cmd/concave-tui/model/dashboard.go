@@ -93,6 +93,7 @@ type DashboardModel struct {
 	width     int
 	height    int
 	active    bool
+	loaded    bool
 	loading   bool
 	loadToken int
 	cfg       tuiconfig.Config
@@ -123,9 +124,13 @@ func (m *DashboardModel) SetPreset(name string) {
 
 func (m *DashboardModel) Activate() tea.Cmd {
 	m.active = true
-	m.loading = true
 	m.loadToken++
 	token := m.loadToken
+	if m.loaded {
+		m.loading = false
+		return dashboardTickCmd(token, m.refreshInterval())
+	}
+	m.loading = true
 	return tea.Batch(loadDashboardCmd(token), dashboardTickCmd(token, m.refreshInterval()))
 }
 
@@ -155,6 +160,7 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 		if msg.token != m.loadToken {
 			return m, nil
 		}
+		m.loaded = true
 		m.loading = false
 		m.metrics = msg.metrics
 		m.firstRun = msg.firstRun
@@ -293,10 +299,9 @@ func (m DashboardModel) widgetByID(id string) (Widget, bool) {
 
 func (m DashboardModel) renderWidgetCard(widget Widget, width, height int, style string) string {
 	bodyHeight := max(3, height-3)
-	body := padToHeight(widget.Render(width-4, bodyHeight, style), bodyHeight)
+	body := widget.Render(width-4, bodyHeight, style)
 	return lipgloss.NewStyle().
 		Width(width).
-		Height(height).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(ColorDeep)).
 		Padding(0, 1).

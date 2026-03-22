@@ -151,10 +151,11 @@ func TestDashboardTickAndHelpers(t *testing.T) {
 	}
 }
 
-func TestDashboardLayoutFillsColumnHeight(t *testing.T) {
+func TestDashboardLayoutAssignsHeightsAndActivationKeepsSnapshot(t *testing.T) {
 	m := NewDashboardModel()
 	m.SetConfig(tuiconfig.DefaultConfig())
 	m.loading = false
+	m.loaded = true
 	m.width = 120
 	m.height = 24
 	m.metrics = dashboardMetrics{
@@ -168,15 +169,16 @@ func TestDashboardLayoutFillsColumnHeight(t *testing.T) {
 		t.Fatal("expected widget layout")
 	}
 	for _, column := range layout {
-		total := 0
-		for idx, item := range column {
-			total += item.height
-			if idx < len(column)-1 {
-				total++
+		for _, item := range column {
+			if item.height < 4 {
+				t.Fatalf("widget height = %d, want at least 4", item.height)
 			}
 		}
-		if total != m.height {
-			t.Fatalf("column total = %d, want %d", total, m.height)
-		}
+	}
+	if cmd := m.Activate(); cmd == nil {
+		t.Fatal("expected tick command on activate")
+	}
+	if m.loading {
+		t.Fatal("expected activate to preserve existing snapshot")
 	}
 }

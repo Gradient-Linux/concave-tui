@@ -61,22 +61,22 @@ func DefaultConfig() Config {
 		Presets: []Preset{
 			{
 				Name:        "default",
-				Description: "Balanced view — GPU, suites, system",
+				Description: "Balance view",
 				Widgets:     []string{"gpu-graph", "vram-bar", "ram-bar", "suite-status", "system-health"},
 			},
 			{
 				Name:        "training",
-				Description: "Training-focused — GPU utilization and VRAM front and centre",
+				Description: "Training view",
 				Widgets:     []string{"gpu-graph", "gpu-graph-2", "vram-bar", "suite-status"},
 			},
 			{
 				Name:        "mlops",
-				Description: "MLOps-focused — suite health, ports, Airflow and Grafana status",
+				Description: "MLOps view",
 				Widgets:     []string{"suite-status", "port-map", "flow-services", "system-health"},
 			},
 			{
 				Name:        "inference",
-				Description: "Inference-focused — vLLM endpoint, GPU, container health",
+				Description: "Inference view",
 				Widgets:     []string{"gpu-graph", "vram-bar", "neural-containers", "suite-status"},
 			},
 		},
