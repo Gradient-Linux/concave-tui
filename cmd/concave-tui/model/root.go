@@ -443,9 +443,6 @@ func (m *RootModel) contentView() string {
 
 func (m *RootModel) sidebarView() string {
 	lines := make([]string, 0, 7)
-	if m.sidebar == SidebarExpanded {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("concave-tui dev"), "")
-	}
 	for _, view := range visibleViews() {
 		active := view == m.activeView
 		icon := sidebarIcon(view)
@@ -458,10 +455,7 @@ func (m *RootModel) sidebarView() string {
 			lines = append(lines, style.Width(2).Render(icon))
 			continue
 		}
-		lines = append(lines, style.Width(m.sidebarWidth() - 4).Render(" "+icon+"  "+label))
-	}
-	if m.sidebar == SidebarExpanded {
-		lines = append(lines, "", mutedText(" Settings"))
+		lines = append(lines, style.Width(m.sidebarWidth()-4).Render(" "+icon+"  "+label))
 	}
 	return lipgloss.NewStyle().
 		Width(m.sidebarWidth()).
@@ -509,7 +503,7 @@ func (m *RootModel) activeHelp() string {
 		"ctrl+f / b     scroll full page",
 		"1-4            switch view",
 		"",
-		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Actions ("+sidebarLabel(m.activeView)+" view)"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Actions (" + sidebarLabel(m.activeView) + " view)"),
 	}
 	lines = append(lines, m.activeHelpActions()...)
 	lines = append(lines,
