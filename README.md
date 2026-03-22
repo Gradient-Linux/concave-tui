@@ -1,36 +1,92 @@
 # concave-tui
 
-`concave-tui` is the terminal interface for Gradient Linux operations.
+`concave-tui` is the terminal frontend for Gradient Linux. It provides a dedicated
+Bubble Tea interface for suite operations, workspace inspection, logs, health, and
+admin views while treating `concave serve` as the backend authority.
 
-It is intentionally a separate repository from `concave`. The `concave` project
-stays focused on infrastructure concerns: Docker lifecycle, GPU detection,
-workspace state, and headless-safe automation. `concave-tui` owns the Bubble Tea
-UI layer and the terminal interaction model.
+## Responsibilities
 
-## What This Repo Contains
+This repository owns:
 
-- the `concave-tui` Bubble Tea application
-- a sessioned client for `concave serve`
-- role-aware Workspace, Suites, Logs, Doctor, System, and Users views
-- local hardware/workspace rendering helpers that complement the authenticated API
+- the `concave-tui` terminal application
+- login and cached-session bootstrap against `concave serve`
+- role-aware terminal views and keybindings
+- terminal-first rendering for workspace, suites, logs, doctor, system, and users pages
+
+This repository does not own:
+
+- PAM auth
+- Unix group resolution
+- privileged backend operations
+- browser-facing UI
+
+Those live in `concave` and `concave-web`.
+
+## Runtime expectations
+
+`concave-tui` expects:
+
+- a reachable `concave serve` instance
+- a valid cached session or valid host credentials for login
+- ANSI-capable terminal output
+
+Important paths:
+
+- session cache: `~/.config/concave/session.json`
+- TUI config: `~/.config/concave-tui/config.toml`
+
+## Views
+
+The TUI currently exposes:
+
+- Workspace
+- Suites
+- Logs
+- Doctor
+- System
+- Users
+
+Role-aware behavior:
+
+- viewer: read-only operational views
+- developer: interactive lab/shell/exec-style suite access where allowed
+- operator: suite lifecycle and workspace mutation
+- admin: System and Users views plus machine-level actions
 
 ## Build
 
 ```bash
 go test ./...
+go test -race ./...
+go vet ./...
 CGO_ENABLED=0 go build -o concave-tui ./cmd/concave-tui/
-./concave-tui --help
 ```
 
-## Runtime Expectations
+## Run
 
-- a reachable `concave serve` instance
-- a valid cached session or valid Gradient Linux credentials for login
-- a terminal with ANSI support
+```bash
+./concave-tui --help
+./concave-tui
+```
 
-## Relationship to concave
+If a valid cached session exists, startup skips the login prompt. Otherwise the TUI
+authenticates against `concave serve` and writes a new local session file.
 
-- `concave` remains the infrastructure/backend project
-- `concave-tui` is the terminal frontend project
-- `concave-tui` authenticates against `concave serve` instead of owning privileged backend logic locally
-- the two repos can evolve independently without pulling Bubble Tea dependencies into headless infrastructure builds
+## Documentation
+
+Start with [docs/README.md](docs/README.md).
+
+Important docs:
+
+- [docs/architecture.md](docs/architecture.md)
+- [docs/views.md](docs/views.md)
+- [docs/runtime.md](docs/runtime.md)
+
+## Relationship to the stack
+
+- `concave`: infrastructure CLI and authenticated control plane
+- `concave-web`: browser control plane
+- `concave-tui`: terminal control plane client
+
+The split keeps Bubble Tea and terminal UX dependencies out of the infrastructure
+binary.

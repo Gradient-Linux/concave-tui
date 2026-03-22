@@ -43,3 +43,6 @@ New direct dependencies require maintainer approval.
 
 Use small, coherent changes and update docs in the same pull request when behavior
 changes.
+
+Documentation for this repo lives in [docs](docs). Keep [README.md](README.md) and
+the relevant files under `docs/` aligned with runtime or UX changes.
