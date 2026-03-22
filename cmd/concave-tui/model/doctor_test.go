@@ -25,14 +25,21 @@ func TestDoctorUpdateRerunResetsChecks(t *testing.T) {
 
 func TestDoctorViewShowsRecovery(t *testing.T) {
 	m := NewDoctorModel()
+	m.width = 40
 	m.checks = []doctorCheck{
 		{name: "neural", status: "warn", detail: "1 / 3 containers running", recovery: "└─ gradient-neural-infer stopped · run: concave start neural"},
 	}
 	m.checkedAt = time.Now()
 
 	view := m.View()
-	if !strings.Contains(view, "concave start neural") {
+	if !strings.Contains(view, "concave") || !strings.Contains(view, "start neural") {
 		t.Fatalf("View() = %q", view)
+	}
+	if !strings.Contains(view, "neural") {
+		t.Fatalf("expected name column in view, got %q", view)
+	}
+	if strings.Contains(view, "neu\nral") || strings.Contains(view, "neura\nl") {
+		t.Fatalf("name should not wrap into detail column, got %q", view)
 	}
 }
 

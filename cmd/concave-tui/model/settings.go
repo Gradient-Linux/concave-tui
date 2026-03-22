@@ -358,16 +358,10 @@ func (m SettingsModel) renderNumericRow(label string, input textinput.Model, foc
 	value := input.View()
 	if !focused {
 		value = mutedText(input.Value())
+	} else {
+		value = lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Render(value)
 	}
-	inputStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(ColorMuted)).
-		Padding(0, 1)
-	if focused {
-		inputStyle = inputStyle.BorderForeground(lipgloss.Color(ColorGold))
-	}
-
-	return labelStyle.Width(18).Render(label) + " " + inputStyle.Render(value)
+	return labelStyle.Width(18).Render(label) + " " + value
 }
 
 func (m SettingsModel) presetLabel(name string) string {

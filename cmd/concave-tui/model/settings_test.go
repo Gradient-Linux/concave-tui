@@ -22,6 +22,9 @@ func TestSettingsRadioSelectionRendersAndMoves(t *testing.T) {
 	if strings.Contains(view, "GPU, suites, system") {
 		t.Fatalf("unexpected preset description text in view, got %q", view)
 	}
+	if strings.Contains(view, "Width threshold    ╭") || strings.Contains(view, "Height threshold   ╭") || strings.Contains(view, "Refresh interval   ╭") {
+		t.Fatalf("unexpected boxed numeric row in view, got %q", view)
+	}
 
 	updated, _ := m.Update(keyRunes("l"))
 	if updated.graphStyle.Value() != "line" {

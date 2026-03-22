@@ -169,17 +169,19 @@ func TestDashboardLayoutAssignsHeightsAndActivationKeepsSnapshot(t *testing.T) {
 	if len(layout) == 0 {
 		t.Fatal("expected widget layout")
 	}
+	hasTall := false
 	for _, column := range layout {
-		total := 0
 		for _, item := range column {
 			if item.height < 4 {
 				t.Fatalf("widget height = %d, want at least 4", item.height)
 			}
-			total += item.height
+			if item.height > 10 {
+				hasTall = true
+			}
 		}
-		if total < m.height-(len(column)-1) {
-			t.Fatalf("column total = %d, want close to content height %d", total, m.height)
-		}
+	}
+	if !hasTall {
+		t.Fatal("expected at least one expanded dashboard widget")
 	}
 	if cmd := m.Activate(); cmd == nil {
 		t.Fatal("expected tick command on activate")

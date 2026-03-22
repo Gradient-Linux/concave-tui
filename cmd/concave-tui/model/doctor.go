@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 )
@@ -83,9 +84,10 @@ func (m DoctorModel) Update(msg tea.Msg) (DoctorModel, tea.Cmd) {
 
 func (m DoctorModel) View() string {
 	lines := []string{fmt.Sprintf("System Health                          last checked %s · r re-run", relativeCheckTime(m.checkedAt)), ""}
+	contentWidth := max(40, m.width)
 	for _, check := range m.checks {
 		if check.pending {
-			lines = append(lines, fmt.Sprintf("…  %-18s pending", check.name))
+			lines = append(lines, renderDoctorBlock("…", check.name, "pending", "", contentWidth)...)
 			continue
 		}
 		prefix := mutedText("—")
@@ -97,15 +99,39 @@ func (m DoctorModel) View() string {
 		case "fail":
 			prefix = errorText("✗")
 		}
-		lines = append(lines, fmt.Sprintf("%s  %-18s %s", prefix, check.name, check.detail))
-		if check.recovery != "" {
-			lines = append(lines, "   "+check.recovery)
-		}
+		lines = append(lines, renderDoctorBlock(prefix, check.name, check.detail, check.recovery, contentWidth)...)
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m DoctorModel) HelpView() string { return "Doctor\nr re-run checks" }
+
+func renderDoctorBlock(prefix, name, detail, recovery string, totalWidth int) []string {
+	nameWidth := 18
+	if totalWidth < 60 {
+		nameWidth = 14
+	}
+	if totalWidth < 48 {
+		nameWidth = 12
+	}
+	detailWidth := max(12, totalWidth-nameWidth-4)
+	wrapped := strings.Split(lipgloss.NewStyle().Width(detailWidth).Render(detail), "\n")
+	lines := make([]string, 0, len(wrapped)+2)
+	for idx, part := range wrapped {
+		if idx == 0 {
+			lines = append(lines, fmt.Sprintf("%s  %-*s %s", prefix, nameWidth, name, part))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s  %-*s %s", " ", nameWidth, "", part))
+	}
+	if recovery != "" {
+		recoveryLines := strings.Split(lipgloss.NewStyle().Width(detailWidth).Render(recovery), "\n")
+		for _, part := range recoveryLines {
+			lines = append(lines, fmt.Sprintf("%s  %-*s %s", " ", nameWidth, "", part))
+		}
+	}
+	return lines
+}
 
 func (m DoctorModel) runChecks() tea.Cmd {
 	token := m.runToken

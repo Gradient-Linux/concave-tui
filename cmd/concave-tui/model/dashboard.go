@@ -300,13 +300,16 @@ func (m DashboardModel) widgetByID(id string) (Widget, bool) {
 func (m DashboardModel) renderWidgetCard(widget Widget, width, height int, style string) string {
 	bodyHeight := max(3, height-3)
 	body := widget.Render(width-4, bodyHeight, style)
-	return lipgloss.NewStyle().
+	card := lipgloss.NewStyle().
 		Width(width).
-		Height(height).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(ColorDeep)).
-		Padding(0, 1).
-		Render(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(widget.Title()) + "\n" + body)
+		Padding(0, 1)
+	if widgetExpandable(widget.ID()) {
+		body = padToHeight(body, bodyHeight)
+		card = card.Height(height)
+	}
+	return card.Render(lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render(widget.Title()) + "\n" + body)
 }
 
 func (m DashboardModel) layoutWidgets(widgets []Widget, contentWidth, contentHeight int, style string) [][]renderedWidget {
@@ -458,12 +461,12 @@ func (m DashboardModel) renderSystemHealthWidget(width int) string {
 	} else if freeRatio < 0.20 {
 		freeText = warnText(freeText)
 	}
-	return strings.Join([]string{
-		"Docker    " + dockerState,
-		"Internet  " + internetState,
-		"Disk      " + freeText,
-		"Workspace " + truncate(workspaceRootFn(), max(16, width-14)),
-	}, "\n")
+	lines := []string{}
+	lines = append(lines, renderLabeledBlock("Docker", dockerState, width)...)
+	lines = append(lines, renderLabeledBlock("Internet", internetState, width)...)
+	lines = append(lines, renderLabeledBlock("Disk", freeText, width)...)
+	lines = append(lines, renderLabeledBlock("Workspace", truncate(workspaceRootFn(), max(16, width-14)), width)...)
+	return strings.Join(lines, "\n")
 }
 
 func (m DashboardModel) renderPortMapWidget() string {
@@ -629,31 +632,26 @@ func distributeHeight(widgets []Widget, contentHeight int) []int {
 	gaps := max(0, len(widgets)-1)
 	available := max(len(widgets)*4, contentHeight-gaps)
 	heights := make([]int, len(widgets))
-	fixedTotal := 0
+	totalMin := 0
 	expandable := make([]int, 0, len(widgets))
 
 	for idx, widget := range widgets {
 		minHeight := widgetMinHeight(widget.ID())
 		heights[idx] = minHeight
+		totalMin += minHeight
 		if widgetExpandable(widget.ID()) {
 			expandable = append(expandable, idx)
-		} else {
-			fixedTotal += minHeight
 		}
 	}
 
 	if len(expandable) == 0 {
-		return evenHeights(available, len(widgets))
-	}
-	expandableMin := 0
-	for _, idx := range expandable {
-		expandableMin += heights[idx]
-	}
-	if available < fixedTotal+expandableMin {
-		return evenHeights(available, len(widgets))
+		return heights
 	}
 
-	remaining := available - fixedTotal - expandableMin
+	remaining := available - totalMin
+	if remaining <= 0 {
+		return heights
+	}
 	share := 0
 	extra := 0
 	if len(expandable) > 0 {
@@ -690,7 +688,7 @@ func evenHeights(total, count int) []int {
 
 func widgetExpandable(id string) bool {
 	switch id {
-	case "gpu-graph", "gpu-graph-2", "suite-status", "system-health", "port-map", "flow-services", "neural-containers":
+	case "gpu-graph", "gpu-graph-2":
 		return true
 	default:
 		return false
@@ -710,6 +708,22 @@ func widgetMinHeight(id string) int {
 	default:
 		return 5
 	}
+}
+
+func renderLabeledBlock(label, detail string, totalWidth int) []string {
+	labelWidth := 10
+	detailWidth := max(12, totalWidth-labelWidth-1)
+	wrapped := lipgloss.NewStyle().Width(detailWidth).Render(detail)
+	parts := strings.Split(wrapped, "\n")
+	lines := make([]string, 0, len(parts))
+	for idx, part := range parts {
+		if idx == 0 {
+			lines = append(lines, fmt.Sprintf("%-*s %s", labelWidth, label, part))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%-*s %s", labelWidth, "", part))
+	}
+	return lines
 }
 
 func formatSuitePorts(s suite.Suite) []string {
