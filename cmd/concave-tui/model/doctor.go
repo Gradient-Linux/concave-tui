@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 )
 
@@ -27,13 +28,20 @@ type doctorCheckMsg struct {
 	check doctorCheck
 }
 
+type doctorChecksLoadedMsg struct {
+	checks []doctorCheck
+	err    error
+}
+
 type DoctorModel struct {
 	width     int
 	height    int
 	active    bool
+	role      tuiauth.Role
 	runToken  int
 	checkedAt time.Time
 	checks    []doctorCheck
+	lastErr   error
 }
 
 var (
@@ -47,11 +55,15 @@ func NewDoctorModel() DoctorModel {
 	}
 }
 
+func (m *DoctorModel) SetRole(role tuiauth.Role) {
+	m.role = role
+}
+
 func (m *DoctorModel) Activate() tea.Cmd {
 	m.active = true
 	m.runToken++
 	m.checks = doctorChecksTemplate()
-	return m.runChecks()
+	return loadDoctorChecksCmd()
 }
 
 func (m *DoctorModel) Deactivate() { m.active = false }
@@ -66,7 +78,13 @@ func (m DoctorModel) Update(msg tea.Msg) (DoctorModel, tea.Cmd) {
 		if msg.String() == "r" {
 			m.runToken++
 			m.checks = doctorChecksTemplate()
-			return m, m.runChecks()
+			return m, loadDoctorChecksCmd()
+		}
+	case doctorChecksLoadedMsg:
+		m.lastErr = msg.err
+		if msg.err == nil {
+			m.checks = msg.checks
+			m.checkedAt = time.Now()
 		}
 	case doctorCheckMsg:
 		if msg.token != m.runToken {
@@ -84,6 +102,9 @@ func (m DoctorModel) Update(msg tea.Msg) (DoctorModel, tea.Cmd) {
 
 func (m DoctorModel) View() string {
 	lines := []string{fmt.Sprintf("System Health                          last checked %s · r re-run", relativeCheckTime(m.checkedAt)), ""}
+	if m.lastErr != nil {
+		lines = append(lines, errorText(m.lastErr.Error()), "")
+	}
 	contentWidth := max(40, m.width)
 	for _, check := range m.checks {
 		if check.pending {
@@ -105,6 +126,28 @@ func (m DoctorModel) View() string {
 }
 
 func (m DoctorModel) HelpView() string { return "Doctor\nr re-run checks" }
+
+func loadDoctorChecksCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		checks, err := apiDoctorFn(ctx)
+		if err != nil {
+			return doctorChecksLoadedMsg{err: err}
+		}
+		items := make([]doctorCheck, 0, len(checks))
+		for _, check := range checks {
+			items = append(items, doctorCheck{
+				name:     check.Name,
+				status:   check.Status,
+				detail:   check.Detail,
+				recovery: check.Recovery,
+				pending:  false,
+			})
+		}
+		return doctorChecksLoadedMsg{checks: items}
+	}
+}
 
 func renderDoctorBlock(prefix, name, detail, recovery string, totalWidth int) []string {
 	nameWidth := max(10, min(18, totalWidth/4))

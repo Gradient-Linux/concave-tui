@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -30,6 +31,11 @@ type dockerLogEvent struct {
 type logsLoadedMsg struct {
 	targets []logTarget
 	err     error
+}
+
+type logStream struct {
+	cancel func()
+	ch     <-chan dockerLogEvent
 }
 
 type logEnvelope struct {
@@ -282,21 +288,19 @@ func (m LogsModel) HelpView() string {
 
 func loadLogsTargetsCmd() tea.Cmd {
 	return func() tea.Msg {
-		state, err := loadStateFn()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		suites, err := apiSuitesFn(ctx)
 		if err != nil {
 			return logsLoadedMsg{err: err}
 		}
 		targets := make([]logTarget, 0)
-		for _, name := range orderedInstalledSuites(state.Installed) {
-			s, err := currentSuiteDefinition(name)
-			if err != nil {
-				if isMissingForgeSelection(err) && name == "forge" {
-					continue
-				}
-				return logsLoadedMsg{err: err}
+		for _, summary := range suites {
+			if !summary.Installed || summary.State == "unconfigured" {
+				continue
 			}
-			for _, container := range s.Containers {
-				targets = append(targets, logTarget{Suite: name, Container: container.Name})
+			for _, container := range summary.Containers {
+				targets = append(targets, logTarget{Suite: summary.Name, Container: container.Name})
 			}
 		}
 		return logsLoadedMsg{targets: targets}
@@ -311,15 +315,15 @@ func (m *LogsModel) startStreamForSelection() tea.Cmd {
 	if len(m.targets) == 0 {
 		return nil
 	}
-	cancel, ch, err := dockerLogStreamFn(m.targets[m.selected].Container)
+	stream, err := apiLogsDialFn(context.Background(), m.targets[m.selected].Suite, m.targets[m.selected].Container)
 	if err != nil {
 		return func() tea.Msg { return logsLoadedMsg{err: err} }
 	}
-	m.cancel = cancel
-	m.streamCh = ch
+	m.cancel = stream.cancel
+	m.streamCh = stream.ch
 	m.follow = true
 	m.syncViewport()
-	return waitForLogEvent(ch)
+	return waitForLogEvent(stream.ch)
 }
 
 func waitForLogEvent(ch <-chan dockerLogEvent) tea.Cmd {

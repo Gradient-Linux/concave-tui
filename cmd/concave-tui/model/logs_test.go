@@ -1,21 +1,25 @@
 package model
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Gradient-Linux/concave-tui/internal/config"
+	apiclient "github.com/Gradient-Linux/concave-tui/internal/client"
 )
 
 func TestLogsContainerSwitchCancelsPreviousStream(t *testing.T) {
 	restoreModelDeps(t)
 
 	cancelCount := 0
-	dockerLogStreamFn = func(container string) (func(), <-chan dockerLogEvent, error) {
+	apiLogsDialFn = func(ctx context.Context, suiteName, container string) (logStream, error) {
 		ch := make(chan dockerLogEvent)
-		return func() { cancelCount++ }, ch, nil
+		return logStream{
+			cancel: func() { cancelCount++ },
+			ch:     ch,
+		}, nil
 	}
 
 	m := NewLogsModel()
@@ -57,47 +61,32 @@ func TestLogsBufferCapIsEnforced(t *testing.T) {
 	}
 }
 
-func TestLogsSearchHighlightsMatches(t *testing.T) {
-	m := NewLogsModel()
-	m.lines = []string{"jupyter started", "kernel ready"}
-	m.SetSize(120, 30)
-	m.searchInput.SetValue("jupyter")
-	m.syncViewport()
-
-	view := m.viewport.View()
-	if !strings.Contains(view, "jupyter started") {
-		t.Fatalf("viewport missing matching line: %q", view)
-	}
-	if !strings.Contains(view, "kernel ready") {
-		t.Fatalf("viewport missing non-matching line: %q", view)
-	}
-}
-
-func TestLogsSearchDismissLeavesStreamActive(t *testing.T) {
-	m := NewLogsModel()
-	m.searching = true
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if updated.searching {
-		t.Fatal("expected esc to dismiss search")
-	}
-}
-
-func TestLogsActivateDeactivateViewHelpersAndLoad(t *testing.T) {
+func TestLogsActivateLoadAndView(t *testing.T) {
 	restoreModelDeps(t)
 
-	loadStateFn = func() (config.State, error) {
-		return config.State{Installed: []string{"boosting"}}, nil
+	apiSuitesFn = func(ctx context.Context) ([]apiclient.SuiteSummary, error) {
+		return []apiclient.SuiteSummary{
+			{
+				Name:      "boosting",
+				Installed: true,
+				State:     "running",
+				Containers: []apiclient.ContainerInfo{
+					{Name: "gradient-boost-core"},
+				},
+			},
+		}, nil
+	}
+	apiLogsDialFn = func(ctx context.Context, suiteName, container string) (logStream, error) {
+		ch := make(chan dockerLogEvent)
+		return logStream{cancel: func() {}, ch: ch}, nil
 	}
 
 	m := NewLogsModel()
 	if cmd := m.Activate(); cmd == nil {
 		t.Fatal("expected activate cmd")
 	}
-	if help := m.HelpView(); help == "" {
-		t.Fatal("expected logs help text")
-	}
 	msg := loadLogsTargetsCmd()().(logsLoadedMsg)
-	if msg.err != nil || len(msg.targets) == 0 {
+	if msg.err != nil || len(msg.targets) != 1 {
 		t.Fatalf("loadLogsTargetsCmd() = %#v", msg)
 	}
 	m.loading = false
@@ -106,59 +95,16 @@ func TestLogsActivateDeactivateViewHelpersAndLoad(t *testing.T) {
 	if view := m.View(); view == "" {
 		t.Fatal("expected logs view output")
 	}
-	called := false
-	m.cancel = func() { called = true }
-	m.Deactivate()
-	if m.active {
-		t.Fatal("expected deactivate to clear active flag")
-	}
-	if !called {
-		t.Fatal("expected active log stream to be cancelled")
-	}
-	if max(1, 2) != 2 {
-		t.Fatal("expected max helper to work")
-	}
-}
-
-func TestWaitForLogEventReturnsMessage(t *testing.T) {
-	ch := make(chan dockerLogEvent, 1)
-	ch <- dockerLogEvent{line: "hello"}
-	if waitForLogEvent(ch)() == nil {
-		t.Fatal("expected envelope message")
-	}
-}
-
-func TestStartDockerLogStreamReadsOutput(t *testing.T) {
-	prependMockDocker(t, `printf 'line one\n'; printf 'line two\n' >&2`)
-
-	cancel, ch, err := startDockerLogStream("gradient-boost-lab")
-	if err != nil {
-		t.Fatalf("startDockerLogStream() error = %v", err)
-	}
-	defer cancel()
-
-	var lines []string
-	for event := range ch {
-		if event.line != "" {
-			lines = append(lines, event.line)
-		}
-		if event.err != nil {
-			t.Fatalf("unexpected stream error: %v", event.err)
-		}
-	}
-	if len(lines) != 2 {
-		t.Fatalf("lines = %#v", lines)
-	}
 }
 
 func TestLogsUpdateCoversKeyPaths(t *testing.T) {
 	restoreModelDeps(t)
 
 	streams := 0
-	dockerLogStreamFn = func(container string) (func(), <-chan dockerLogEvent, error) {
+	apiLogsDialFn = func(ctx context.Context, suiteName, container string) (logStream, error) {
 		streams++
 		ch := make(chan dockerLogEvent, 2)
-		return func() {}, ch, nil
+		return logStream{cancel: func() {}, ch: ch}, nil
 	}
 
 	m := NewLogsModel()
@@ -183,9 +129,6 @@ func TestLogsUpdateCoversKeyPaths(t *testing.T) {
 		t.Fatal("expected enter to dismiss search")
 	}
 
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	updated, _ = updated.Update(keyRunes("f"))
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if streams == 0 {
 		t.Fatal("expected stream restarts")

@@ -3,7 +3,6 @@ package model
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -12,9 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/Gradient-Linux/concave-tui/internal/gpu"
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
+	apiclient "github.com/Gradient-Linux/concave-tui/internal/client"
 	"github.com/Gradient-Linux/concave-tui/internal/suite"
-	"github.com/Gradient-Linux/concave-tui/internal/system"
 )
 
 type suiteRow struct {
@@ -24,6 +23,7 @@ type suiteRow struct {
 	Image     string
 	Running   int
 	Total     int
+	Summary    apiclient.SuiteSummary
 	Detail    suiteDetail
 	Problem   string
 }
@@ -68,6 +68,7 @@ type SuitesModel struct {
 	width         int
 	height        int
 	active        bool
+	role          tuiauth.Role
 	loading       bool
 	selected      int
 	forgePrompt   bool
@@ -94,6 +95,10 @@ func NewSuitesModel() SuitesModel {
 	input.Placeholder = "command"
 	input.Prompt = "exec> "
 	return SuitesModel{loading: true, execInput: input}
+}
+
+func (m *SuitesModel) SetRole(role tuiauth.Role) {
+	m.role = role
 }
 
 func (m *SuitesModel) Activate() tea.Cmd {
@@ -138,14 +143,14 @@ func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
 				}
 				return m, nil
 			case "enter", "y":
-				selection, err := m.selectedForgeSelection()
+				keys, err := m.selectedForgeKeys()
 				if err != nil {
 					m.lastErr = err
 					return m, nil
 				}
 				m.forgePrompt = false
 				m.lastErr = nil
-				return m, m.startOperation("install", selection)
+				return m, m.startOperation("install", keys)
 			}
 		}
 		return m, nil
@@ -254,6 +259,9 @@ func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
 				return m, m.startOperation("update")
 			}
 		case "i":
+			if !tuiauth.Can(m.role, tuiauth.ActionInstall) {
+				return m, nil
+			}
 			if row := m.currentRow(); row.Name == "forge" && !row.Installed {
 				m.forgePrompt = true
 				m.forgeCursor = 0
@@ -267,28 +275,49 @@ func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
 			}
 			return m, m.startOperation("install")
 		case "u":
-			if m.currentRow().Installed {
+			if tuiauth.Can(m.role, tuiauth.ActionUpdate) && m.currentRow().Installed {
 				m.confirmUpdate = true
 				m.updatePreview = m.updateDiffLines(m.currentRow())
 			}
 		case "R":
+			if !tuiauth.Can(m.role, tuiauth.ActionRollback) {
+				return m, nil
+			}
 			return m, m.startOperation("rollback")
 		case "s":
+			if !tuiauth.Can(m.role, tuiauth.ActionStart) {
+				return m, nil
+			}
 			return m, m.startOperation("start")
 		case "x":
+			if !tuiauth.Can(m.role, tuiauth.ActionStop) {
+				return m, nil
+			}
 			return m, m.startOperation("stop")
 		case "S":
+			if !tuiauth.Can(m.role, tuiauth.ActionStop) || !tuiauth.Can(m.role, tuiauth.ActionStart) {
+				return m, nil
+			}
 			return m, m.startOperation("restart")
 		case "l":
+			if !tuiauth.Can(m.role, tuiauth.ActionOpenLab) {
+				return m, nil
+			}
 			return m, m.startOperation("lab")
 		case "b":
+			if !tuiauth.Can(m.role, tuiauth.ActionShell) {
+				return m, nil
+			}
 			return m, m.openShell()
 		case "e":
+			if !tuiauth.Can(m.role, tuiauth.ActionExec) {
+				return m, nil
+			}
 			m.execPrompt = true
 			m.execInput.Focus()
 			return m, nil
 		case "r":
-			if m.currentRow().Installed {
+			if tuiauth.Can(m.role, tuiauth.ActionRemove) && m.currentRow().Installed {
 				m.confirmRemove = true
 			}
 		}
@@ -349,7 +378,7 @@ func (m SuitesModel) View() string {
 }
 
 func (m SuitesModel) HelpView() string {
-	return "Suites\nj/k move · i install · r remove · u update · R rollback · s/x start stop · b shell · e exec · l lab"
+	return "Suites\nj/k move"
 }
 
 func (m SuitesModel) currentRow() suiteRow {
@@ -363,54 +392,82 @@ func (m SuitesModel) detailView(row suiteRow) []string {
 	lines := []string{fmt.Sprintf("%s   %s", row.Name, row.State)}
 	if row.Problem != "" {
 		lines = append(lines, "", row.Problem)
-		if row.Installed {
+		if row.Installed && tuiauth.Can(m.role, tuiauth.ActionRemove) {
 			lines = append(lines, "", "[r]remove stale install")
 		}
 		lines = append(lines, mutedText("Clear the stale suite state in the TUI, then retry the install."))
 		return lines
 	}
 	lines = append(lines, "", "Container              Status    Image")
-	for _, container := range row.Detail.Suite.Containers {
-		current := row.Detail.Current[container.Name]
-		previous := row.Detail.Previous[container.Name]
-		status := "not running"
-		for _, state := range row.Detail.Suite.Containers {
-			if state.Name == container.Name {
-				break
-			}
-		}
-		lines = append(lines, fmt.Sprintf("%-22s %-9s %s", container.Name, status, truncate(current, 24)))
+	for _, container := range row.Summary.Containers {
+		lines = append(lines, fmt.Sprintf("%-22s %-9s %s", container.Name, container.Status, truncate(firstNonEmpty(container.Current, container.Image), 24)))
+		previous := container.Previous
 		if previous != "" {
 			lines = append(lines, fmt.Sprintf("  Previous %-14s %s", "", previous))
 		}
 	}
-	if len(row.Detail.Suite.Ports) > 0 {
+	if len(row.Summary.Ports) > 0 {
 		lines = append(lines, "", "Ports")
-		for _, mapping := range row.Detail.Suite.Ports {
-			lines = append(lines, fmt.Sprintf("  :%d · %s", mapping.Port, mapping.Service))
-		}
-	}
-	if len(row.Detail.Suite.Volumes) > 0 {
-		lines = append(lines, "", "Volumes")
-		for _, mount := range row.Detail.Suite.Volumes {
-			lines = append(lines, fmt.Sprintf("  %s -> %s", mount.HostPath, mount.ContainerPath))
+		for _, mapping := range row.Summary.Ports {
+			port := mapping.Port
+			if port == 0 {
+				port = mapping.Host
+			}
+			service := mapping.Service
+			if service == "" {
+				service = mapping.Description
+			}
+			lines = append(lines, fmt.Sprintf("  :%d · %s", port, service))
 		}
 	}
 	if row.Name == "forge" && !row.Installed {
-		lines = append(lines, "", "[i]install custom selection")
+		if tuiauth.Can(m.role, tuiauth.ActionInstall) {
+			lines = append(lines, "", "[i]install custom selection")
+		}
 		return lines
 	}
-	lines = append(lines, "", "[i]install [r]remove [u]update [R]rollback", "[s]start   [x]stop   [b]shell  [e]exec [l]lab")
+	actions := []string{}
+	if tuiauth.Can(m.role, tuiauth.ActionInstall) {
+		actions = append(actions, "[i]install")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionRemove) {
+		actions = append(actions, "[r]remove")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionUpdate) {
+		actions = append(actions, "[u]update")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionRollback) {
+		actions = append(actions, "[R]rollback")
+	}
+	if len(actions) > 0 {
+		lines = append(lines, "", strings.Join(actions, " "))
+	}
+	actions = nil
+	if tuiauth.Can(m.role, tuiauth.ActionStart) {
+		actions = append(actions, "[s]start")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionStop) {
+		actions = append(actions, "[x]stop")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionShell) {
+		actions = append(actions, "[b]shell")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionExec) {
+		actions = append(actions, "[e]exec")
+	}
+	if tuiauth.Can(m.role, tuiauth.ActionOpenLab) {
+		actions = append(actions, "[l]lab")
+	}
+	if len(actions) > 0 {
+		lines = append(lines, strings.Join(actions, "  "))
+	}
 	return lines
 }
 
 func (m SuitesModel) updateDiffLines(row suiteRow) []string {
-	lines := make([]string, 0, len(row.Detail.Suite.Containers))
-	for _, container := range row.Detail.Suite.Containers {
-		current := row.Detail.Current[container.Name]
-		if current == "" {
-			current = container.Image
-		}
+	lines := make([]string, 0, len(row.Summary.Containers))
+	for _, container := range row.Summary.Containers {
+		current := firstNonEmpty(container.Current, container.Image)
 		lines = append(lines, fmt.Sprintf("%-24s %s  →  %s", container.Name, current, container.Image))
 	}
 	return lines
@@ -418,72 +475,40 @@ func (m SuitesModel) updateDiffLines(row suiteRow) []string {
 
 func loadSuitesCmd() tea.Cmd {
 	return func() tea.Msg {
-		state, err := loadStateFn()
-		if err != nil {
-			return suitesLoadedMsg{err: err}
-		}
-		manifest, err := loadManifestFn()
-		if err != nil {
-			return suitesLoadedMsg{err: err}
-		}
-
-		installed := make(map[string]struct{}, len(state.Installed))
-		for _, name := range state.Installed {
-			installed[name] = struct{}{}
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-
-		rows := make([]suiteRow, 0, len(viewOrder))
-		for _, name := range viewOrder {
-			row := suiteRow{Name: name}
-			if _, ok := installed[name]; ok {
-				row.Installed = true
-				row.Image = currentImageForFirstContainer(name, manifest)
-				s, err := currentSuiteDefinition(name)
-				if err != nil {
-					if isMissingForgeSelection(err) && name == "forge" {
-						row.State = "⚠ unconfigured"
-						row.Problem = "Forge is marked installed but its component selection was not saved."
-						rows = append(rows, row)
-						continue
-					}
-					return suitesLoadedMsg{err: err}
+		suites, err := apiSuitesFn(ctx)
+		if err != nil {
+			return suitesLoadedMsg{err: err}
+		}
+		rows := make([]suiteRow, 0, len(suites))
+		for _, summary := range suites {
+			row := suiteRow{
+				Name:      summary.Name,
+				Installed: summary.Installed,
+				Summary:   summary,
+			}
+			if len(summary.Containers) > 0 {
+				row.Image = summary.Containers[0].Image
+			}
+			for _, container := range summary.Containers {
+				if container.Status == "running" {
+					row.Running++
 				}
-				row.Detail = suiteDetail{
-					Suite:    s,
-					Current:  map[string]string{},
-					Previous: map[string]string{},
-				}
-				for _, container := range s.Containers {
-					status, statusErr := dockerStatusFn(ctx, container.Name)
-					if statusErr != nil {
-						status = "error"
-					}
-					if status == "running" {
-						row.Running++
-					}
-				}
-				row.Total = len(s.Containers)
-				switch {
-				case row.Running == row.Total && row.Total > 0:
-					row.State = "● running"
-				case row.Running > 0:
-					row.State = fmt.Sprintf("⚠ %d/%d", row.Running, row.Total)
-				default:
-					row.State = "○ stopped"
-				}
-				for containerName, version := range manifest[name] {
-					row.Detail.Current[containerName] = version.Current
-					row.Detail.Previous[containerName] = version.Previous
-				}
-			} else {
+			}
+			row.Total = len(summary.Containers)
+			switch summary.State {
+			case "running":
+				row.State = "● running"
+			case "degraded":
+				row.State = fmt.Sprintf("⚠ %d/%d", row.Running, row.Total)
+			case "unconfigured":
+				row.State = "⚠ unconfigured"
+				row.Problem = summary.Error
+			case "not-installed":
 				row.State = "— not installed"
-				if s, err := suiteGetFn(name); err == nil && len(s.Containers) > 0 {
-					row.Image = s.Containers[0].Image
-					row.Detail.Suite = s
-				}
+			default:
+				row.State = "○ stopped"
 			}
 			rows = append(rows, row)
 		}
@@ -491,7 +516,7 @@ func loadSuitesCmd() tea.Cmd {
 	}
 }
 
-func (m *SuitesModel) startOperation(kind string, forgeSelections ...suite.ForgeSelection) tea.Cmd {
+func (m *SuitesModel) startOperation(kind string, forgeKeys ...[]string) tea.Cmd {
 	if len(m.rows) == 0 || m.opCh != nil {
 		return nil
 	}
@@ -504,14 +529,13 @@ func (m *SuitesModel) startOperation(kind string, forgeSelections ...suite.Forge
 	m.opTotal = 0
 	m.opLabel = ""
 	name := m.currentRow().Name
-	var forgeSelection *suite.ForgeSelection
-	if len(forgeSelections) > 0 {
-		selected := forgeSelections[0]
-		forgeSelection = &selected
+	var keys []string
+	if len(forgeKeys) > 0 {
+		keys = forgeKeys[0]
 	}
 	go func() {
 		defer close(ch)
-		runSuiteOperation(kind, name, forgeSelection, ch)
+		runSuiteOperation(kind, name, keys, ch)
 	}()
 	return waitForSuiteOperation(ch)
 }
@@ -523,7 +547,7 @@ func waitForSuiteOperation(ch <-chan suiteOperationMsg) tea.Cmd {
 	}
 }
 
-func runSuiteOperation(kind, name string, forgeSelection *suite.ForgeSelection, ch chan<- suiteOperationMsg) {
+func runSuiteOperation(kind, name string, forgeKeys []string, ch chan<- suiteOperationMsg) {
 	send := func(line string) { ch <- suiteOperationMsg{line: line} }
 	progress := func(label string, step, total int) {
 		ch <- suiteOperationMsg{progressLabel: label, progressStep: step, progressTotal: total}
@@ -533,7 +557,7 @@ func runSuiteOperation(kind, name string, forgeSelection *suite.ForgeSelection, 
 
 	switch kind {
 	case "install":
-		failOrDone(performInstall(name, forgeSelection, send, progress), name+" installed", fail, done)
+		failOrDone(performInstall(name, forgeKeys, send, progress), name+" installed", fail, done)
 	case "update":
 		failOrDone(performUpdate(name, send, progress), name+" updated", fail, done)
 	case "rollback":
@@ -568,104 +592,16 @@ func failOrDone(err error, note string, fail func(error), done func(string)) {
 	done(note)
 }
 
-func performInstall(name string, forgeSelection *suite.ForgeSelection, send func(string), progressFns ...func(string, int, int)) error {
+func performInstall(name string, forgeKeys []string, send func(string), progressFns ...func(string, int, int)) error {
 	progress := func(string, int, int) {}
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
 	}
-	s, err := suiteGetFn(name)
-	if err != nil {
-		return err
+	body := any(nil)
+	if name == "forge" && len(forgeKeys) > 0 {
+		body = map[string][]string{"forge_components": forgeKeys}
 	}
-	installed, err := isInstalledFn(name)
-	if err != nil {
-		return err
-	}
-	if installed {
-		send("already installed")
-		return nil
-	}
-	if name == "forge" {
-		selected := forgeSelection
-		if selected == nil {
-			picked, err := suitePickForgeFn()
-			if err != nil {
-				return err
-			}
-			selected = &picked
-		}
-		s.Containers = selected.Containers
-		s.Ports = selected.Ports
-		s.Volumes = selected.Volumes
-	}
-	if s.GPURequired {
-		state, err := gpuDetectFn()
-		if err == nil && state != gpu.GPUStateNVIDIA {
-			send("warning: NVIDIA GPU not detected")
-		}
-	}
-
-	state, err := loadStateFn()
-	if err != nil {
-		return err
-	}
-	conflicts, err := installConflicts(s, state.Installed)
-	if err != nil {
-		return err
-	}
-	if len(conflicts) > 0 {
-		if conflicts[0].ExistingSuite == "forge" {
-			return fmt.Errorf("port %d is reserved by an installed forge suite; select forge and press r to remove it, then retry", conflicts[0].Port)
-		}
-		return fmt.Errorf("port %d already used by %s", conflicts[0].Port, conflicts[0].ExistingSuite)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	totalSteps := len(s.Containers) + 3
-	step := 0
-	progress("Installing", step, totalSteps)
-	for _, container := range s.Containers {
-		send("pulling " + container.Image)
-		if err := dockerTagPreviousFn(container.Image); err != nil {
-			return err
-		}
-		if err := dockerPullStreamFn(ctx, container.Image, func(line string) { send(line) }); err != nil {
-			return err
-		}
-		step++
-		progress("Installing", step, totalSteps)
-	}
-
-	if name == "forge" {
-		data, err := suiteBuildForgeFn(suite.ForgeSelection{Containers: s.Containers, Ports: s.Ports, Volumes: s.Volumes})
-		if err != nil {
-			return err
-		}
-		if _, err := dockerWriteRawFn(name, data); err != nil {
-			return err
-		}
-	} else if _, err := dockerWriteComposeFn(name); err != nil {
-		return err
-	}
-	step++
-	progress("Installing", step, totalSteps)
-
-	manifest, err := loadManifestFn()
-	if err != nil {
-		return err
-	}
-	manifest = recordInstallFn(manifest, s)
-	if err := saveManifestFn(manifest); err != nil {
-		return err
-	}
-	step++
-	progress("Installing", step, totalSteps)
-	if err := addSuiteFn(name); err != nil {
-		return err
-	}
-	progress("Installing", totalSteps, totalSteps)
-	return nil
+	return runServerSuiteJob(name, "install", body, send, progress)
 }
 
 func performUpdate(name string, send func(string), progressFns ...func(string, int, int)) error {
@@ -673,53 +609,7 @@ func performUpdate(name string, send func(string), progressFns ...func(string, i
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
 	}
-	installed, err := isInstalledFn(name)
-	if err != nil {
-		return err
-	}
-	if !installed {
-		return fmt.Errorf("suite %s is not installed", name)
-	}
-	s, err := currentSuiteDefinition(name)
-	if err != nil {
-		return err
-	}
-	manifest, err := loadManifestFn()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	totalSteps := len(s.Containers) + 3
-	step := 0
-	progress("Updating", step, totalSteps)
-	for _, container := range s.Containers {
-		send("pulling " + container.Image)
-		if err := dockerTagPreviousFn(container.Image); err != nil {
-			return err
-		}
-		if err := dockerPullStreamFn(ctx, container.Image, func(line string) { send(line) }); err != nil {
-			return err
-		}
-		manifest = recordUpdateFn(manifest, name, container.Name, container.Image)
-		step++
-		progress("Updating", step, totalSteps)
-	}
-	if err := saveManifestFn(manifest); err != nil {
-		return err
-	}
-	step++
-	progress("Updating", step, totalSteps)
-	if _, err := writeComposeForSuite(name); err != nil {
-		return err
-	}
-	step++
-	progress("Updating", step, totalSteps)
-	if err := dockerComposeUpFn(ctx, dockerComposePathFn(name), true); err != nil {
-		return err
-	}
-	progress("Updating", totalSteps, totalSteps)
-	return nil
+	return runServerSuiteJob(name, "update", nil, send, progress)
 }
 
 func performRollback(name string, send func(string), progressFns ...func(string, int, int)) error {
@@ -727,48 +617,7 @@ func performRollback(name string, send func(string), progressFns ...func(string,
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
 	}
-	installed, err := isInstalledFn(name)
-	if err != nil {
-		return err
-	}
-	if !installed {
-		return fmt.Errorf("suite %s is not installed", name)
-	}
-	manifest, err := loadManifestFn()
-	if err != nil {
-		return err
-	}
-	manifest, err = swapRollbackFn(manifest, name)
-	if err != nil {
-		return err
-	}
-	totalSteps := max(3, len(manifest[name])+2)
-	step := 0
-	progress("Rollback", step, totalSteps)
-	for containerName, version := range manifest[name] {
-		send(fmt.Sprintf("restored %s to %s", containerName, version.Current))
-		step++
-		progress("Rollback", step, totalSteps)
-	}
-	if err := saveManifestFn(manifest); err != nil {
-		return err
-	}
-	send("restoring previous image tags")
-	step++
-	progress("Rollback", step, totalSteps)
-	if _, err := writeComposeForSuite(name); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	if err := dockerComposeDownFn(ctx, dockerComposePathFn(name)); err != nil {
-		return err
-	}
-	if err := dockerComposeUpFn(ctx, dockerComposePathFn(name), true); err != nil {
-		return err
-	}
-	progress("Rollback", totalSteps, totalSteps)
-	return nil
+	return runServerSuiteJob(name, "rollback", nil, send, progress)
 }
 
 func performStart(name string, progressFns ...func(string, int, int)) error {
@@ -776,22 +625,7 @@ func performStart(name string, progressFns ...func(string, int, int)) error {
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
 	}
-	s, err := currentSuiteDefinition(name)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	progress("Starting", 0, 2)
-	if err := dockerComposeUpFn(ctx, dockerComposePathFn(name), true); err != nil {
-		return err
-	}
-	progress("Starting", 1, 2)
-	if err := systemRegisterFn(s); err != nil {
-		return err
-	}
-	progress("Starting", 2, 2)
-	return nil
+	return runServerSuiteJob(name, "start", nil, nil, progress)
 }
 
 func performStop(name string, progressFns ...func(string, int, int)) error {
@@ -799,22 +633,7 @@ func performStop(name string, progressFns ...func(string, int, int)) error {
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
 	}
-	s, err := currentSuiteDefinition(name)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	progress("Stopping", 0, 2)
-	if err := dockerComposeDownFn(ctx, dockerComposePathFn(name)); err != nil {
-		return err
-	}
-	progress("Stopping", 1, 2)
-	if err := systemDeregisterFn(s); err != nil {
-		return err
-	}
-	progress("Stopping", 2, 2)
-	return nil
+	return runServerSuiteJob(name, "stop", nil, nil, progress)
 }
 
 func performRestart(name string, progressFns ...func(string, int, int)) error {
@@ -837,70 +656,10 @@ func performRemove(name string, progressFns ...func(string, int, int)) error {
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
 	}
-	installed, err := isInstalledFn(name)
-	if err != nil {
-		return err
-	}
-	if !installed {
-		return fmt.Errorf("suite %s is not installed", name)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	progress("Removing", 0, 4)
-	composePath := dockerComposePathFn(name)
-	if _, statErr := os.Stat(composePath); statErr == nil {
-		if err := runComposeRemoveFn(ctx, composePath); err != nil {
-			return err
-		}
-	} else if os.IsNotExist(statErr) {
-		if err := cleanupSuiteContainers(ctx, name); err != nil {
-			return err
-		}
-	} else {
-		return statErr
-	}
-	progress("Removing", 1, 4)
-	_ = os.Remove(composePath)
-	if err := removeSuiteFn(name); err != nil {
-		return err
-	}
-	progress("Removing", 2, 4)
-	manifest, err := loadManifestFn()
-	if err != nil {
-		return err
-	}
-	delete(manifest, name)
-	if err := saveManifestFn(manifest); err != nil {
-		return err
-	}
-	s, err := cleanupSuiteDefinition(name)
-	if err != nil {
-		return err
-	}
-	progress("Removing", 3, 4)
-	if err := systemDeregisterFn(s); err != nil {
-		return err
-	}
-	progress("Removing", 4, 4)
-	return nil
+	return runServerSuiteJob(name, "remove", nil, nil, progress)
 }
 
-func installConflicts(s suite.Suite, installed []string) ([]system.PortConflict, error) {
-	conflicts, err := system.CheckConflicts(s, installed)
-	if err != nil {
-		return nil, err
-	}
-	filtered := make([]system.PortConflict, 0, len(conflicts))
-	for _, conflict := range conflicts {
-		if conflict.ExistingSuite == "forge" {
-			if _, forgeErr := currentSuiteDefinition("forge"); isMissingForgeSelection(forgeErr) {
-				continue
-			}
-		}
-		filtered = append(filtered, conflict)
-	}
-	return filtered, nil
-}
+func installConflicts(_ suite.Suite, _ []string) ([]suite.PortConflict, error) { return nil, nil }
 
 func cleanupSuiteDefinition(name string) (suite.Suite, error) {
 	s, err := currentSuiteDefinition(name)
@@ -968,6 +727,19 @@ func (m SuitesModel) selectedForgeSelection() (suite.ForgeSelection, error) {
 	return suiteForgeSelectFn(keys)
 }
 
+func (m SuitesModel) selectedForgeKeys() ([]string, error) {
+	keys := make([]string, 0, len(m.forgeSelected))
+	for _, option := range m.forgeOptions {
+		if m.forgeSelected[option.Key] {
+			keys = append(keys, option.Key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no components selected")
+	}
+	return keys, nil
+}
+
 func (m SuitesModel) openShell() tea.Cmd {
 	row := m.currentRow()
 	if !row.Installed {
@@ -976,6 +748,9 @@ func (m SuitesModel) openShell() tea.Cmd {
 		}
 	}
 	container := suitePrimaryFn(row.Detail.Suite)
+	if container == "" && len(row.Summary.Containers) > 0 {
+		container = row.Summary.Containers[0].Name
+	}
 	cmd := exec.Command("docker", "exec", "-it", container, "sh")
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return suiteOperationMsg{done: true, err: err, note: "shell exited"}
@@ -984,7 +759,10 @@ func (m SuitesModel) openShell() tea.Cmd {
 
 func (m SuitesModel) execSuiteCommand(input string) tea.Cmd {
 	row := m.currentRow()
-	container := suitePrimaryFn(row.Detail.Suite)
+	container := ""
+	if len(row.Summary.Containers) > 0 {
+		container = row.Summary.Containers[0].Name
+	}
 	args := strings.Fields(input)
 	if len(args) == 0 {
 		return nil
@@ -993,6 +771,62 @@ func (m SuitesModel) execSuiteCommand(input string) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return suiteOperationMsg{done: true, err: err, note: "exec finished"}
 	})
+}
+
+func runServerSuiteJob(name, action string, body any, send func(string), progress func(string, int, int)) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	jobID, err := apiSuiteActionFn(ctx, name, action, body)
+	if err != nil {
+		return err
+	}
+	seen := 0
+	step := 5
+	progress(strings.Title(action), step, 100)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		reqCtx, reqCancel := context.WithTimeout(ctx, 15*time.Second)
+		job, err := apiJobFn(reqCtx, jobID)
+		reqCancel()
+		if err != nil {
+			return err
+		}
+		for _, line := range job.Lines[seen:] {
+			if send != nil {
+				send(line)
+			}
+			if step < 90 {
+				step += 4
+			}
+		}
+		seen = len(job.Lines)
+		progress(strings.Title(action), step, 100)
+		switch job.Status {
+		case "completed":
+			progress(strings.Title(action), 100, 100)
+			return nil
+		case "failed":
+			if job.Error == "" {
+				job.Error = "job failed"
+			}
+			return fmt.Errorf("%s", job.Error)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func truncate(text string, limit int) string {

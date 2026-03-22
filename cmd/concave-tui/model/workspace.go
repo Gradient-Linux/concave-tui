@@ -1,18 +1,21 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
+	apiclient "github.com/Gradient-Linux/concave-tui/internal/client"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
 	workspacepkg "github.com/Gradient-Linux/concave-tui/internal/workspace"
 )
@@ -70,6 +73,7 @@ type WorkspaceModel struct {
 	width          int
 	height         int
 	active         bool
+	role           tuiauth.Role
 	loaded         bool
 	loading        bool
 	confirmClean   bool
@@ -104,6 +108,10 @@ func (m *WorkspaceModel) SetConfig(cfg tuiconfig.Config) {
 	m.cfg = cfg
 }
 
+func (m *WorkspaceModel) SetRole(role tuiauth.Role) {
+	m.role = role
+}
+
 func (m *WorkspaceModel) Activate() tea.Cmd {
 	m.active = true
 	m.loadToken++
@@ -136,12 +144,12 @@ func (m WorkspaceModel) Update(msg tea.Msg) (WorkspaceModel, tea.Cmd) {
 			token := m.loadToken
 			return m, tea.Batch(loadWorkspaceCmd(token, m.cpuSnapshot), workspaceTickCmd(token, m.refreshInterval()))
 		case "b":
-			if m.busyMessage == "" {
+			if m.busyMessage == "" && tuiauth.Can(m.role, tuiauth.ActionBackup) {
 				m.busyMessage = "Creating backup…"
 				return m, runWorkspaceBackupCmd()
 			}
 		case "x":
-			if m.busyMessage == "" {
+			if m.busyMessage == "" && tuiauth.Can(m.role, tuiauth.ActionClean) {
 				m.confirmClean = true
 			}
 		case "esc", "n":
@@ -363,13 +371,15 @@ func (m WorkspaceModel) renderWorkspaceActions() string {
 	lines := []string{}
 	if m.busyMessage != "" {
 		lines = append(lines, warnText(m.busyMessage))
-	} else {
+	} else if tuiauth.Can(m.role, tuiauth.ActionBackup) {
 		lines = append(lines, fmt.Sprintf("[b] backup notebooks + models      Last backup: %s", relativeBackupTime(m.lastBackup)))
 	}
-	if m.confirmClean {
-		lines = append(lines, fmt.Sprintf("Clean outputs? %s will be freed. y confirm · esc cancel", m.outputsUsage().Human()))
-	} else {
-		lines = append(lines, fmt.Sprintf("[x] clean outputs                  %s will be freed", m.outputsUsage().Human()))
+	if tuiauth.Can(m.role, tuiauth.ActionClean) {
+		if m.confirmClean {
+			lines = append(lines, fmt.Sprintf("Clean outputs? %s will be freed. y confirm · esc cancel", m.outputsUsage().Human()))
+		} else {
+			lines = append(lines, fmt.Sprintf("[x] clean outputs                  %s will be freed", m.outputsUsage().Human()))
+		}
 	}
 	if m.completionNote != "" {
 		lines = append(lines, successText(m.completionNote))
@@ -418,22 +428,23 @@ func (m WorkspaceModel) outputsUsage() workspacepkg.Usage {
 
 func loadWorkspaceCmd(token int, previous ...cpuSnapshot) tea.Cmd {
 	return func() tea.Msg {
-		if err := workspaceEnsureFn(); err != nil {
-			return workspaceLoadedMsg{token: token, loadErr: err}
-		}
-		usages, err := workspaceStatusFn()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		payload, err := apiWorkspaceFn(ctx)
 		if err != nil {
 			return workspaceLoadedMsg{token: token, loadErr: err}
 		}
-		root := workspaceRootFn()
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(root, &stat); err != nil {
-			return workspaceLoadedMsg{token: token, loadErr: err}
+		usages := make([]workspacepkg.Usage, 0, len(payload.Usages))
+		for name, bytes := range payload.Usages {
+			usages = append(usages, workspacepkg.Usage{Name: name, Bytes: int64(bytes)})
 		}
+		slices.SortFunc(usages, func(left, right workspacepkg.Usage) int {
+			return strings.Compare(left.Name, right.Name)
+		})
 
-		total := stat.Blocks * uint64(stat.Bsize)
-		free := stat.Bavail * uint64(stat.Bsize)
-		used := total - free
+		root := payload.Root
+		total := payload.Total
+		used := payload.Used
 		ramUsed, ramTotal, _ := workspaceReadMemFn()
 		gpuState, _ := workspaceGPUDetectFn()
 		gpuDevices := []gpu.NVIDIADevice{}
@@ -566,9 +577,19 @@ func workspaceNoteExpiryCmd() tea.Cmd {
 
 func runWorkspaceBackupCmd() tea.Cmd {
 	return func() tea.Msg {
-		path, err := workspaceBackupFn()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		jobID, err := startWorkspaceJob(ctx, "backup")
 		if err != nil {
 			return workspaceOpMsg{kind: "backup", err: err}
+		}
+		job, err := waitForWorkspaceJob(ctx, jobID)
+		if err != nil {
+			return workspaceOpMsg{kind: "backup", err: err}
+		}
+		path, _ := job.Result["path"].(string)
+		if path == "" {
+			path = "backup created"
 		}
 		return workspaceOpMsg{kind: "backup", success: true, detail: "backup created at " + path}
 	}
@@ -576,10 +597,58 @@ func runWorkspaceBackupCmd() tea.Cmd {
 
 func runWorkspaceCleanCmd() tea.Cmd {
 	return func() tea.Msg {
-		if err := workspaceCleanFn(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		jobID, err := startWorkspaceJob(ctx, "clean")
+		if err != nil {
+			return workspaceOpMsg{kind: "clean", err: err}
+		}
+		if _, err := waitForWorkspaceJob(ctx, jobID); err != nil {
 			return workspaceOpMsg{kind: "clean", err: err}
 		}
 		return workspaceOpMsg{kind: "clean", success: true, detail: "outputs cleaned"}
+	}
+}
+
+func startWorkspaceJob(ctx context.Context, action string) (string, error) {
+	switch action {
+	case "backup":
+		reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return apiWorkspaceBackupFn(reqCtx)
+	case "clean":
+		reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return apiWorkspaceCleanFn(reqCtx)
+	default:
+		return "", fmt.Errorf("unsupported workspace action %s", action)
+	}
+}
+
+func waitForWorkspaceJob(ctx context.Context, id string) (apiclient.JobSnapshot, error) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		job, err := apiJobFn(reqCtx, id)
+		cancel()
+		if err != nil {
+			return apiclient.JobSnapshot{}, err
+		}
+		switch job.Status {
+		case "completed":
+			return job, nil
+		case "failed":
+			if job.Error == "" {
+				job.Error = "job failed"
+			}
+			return apiclient.JobSnapshot{}, fmt.Errorf("%s", job.Error)
+		}
+		select {
+		case <-ctx.Done():
+			return apiclient.JobSnapshot{}, ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 

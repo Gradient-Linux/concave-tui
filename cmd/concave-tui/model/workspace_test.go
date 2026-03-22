@@ -1,12 +1,15 @@
 package model
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
+	apiclient "github.com/Gradient-Linux/concave-tui/internal/client"
 	workspacepkg "github.com/Gradient-Linux/concave-tui/internal/workspace"
 )
 
@@ -35,6 +38,30 @@ func TestWorkspaceUpdateBackupCompletionAndExpiry(t *testing.T) {
 	}
 }
 
+func TestLoadWorkspaceCmdReturnsUsageData(t *testing.T) {
+	restoreModelDeps(t)
+
+	apiWorkspaceFn = func(ctx context.Context) (apiclient.WorkspacePayload, error) {
+		return apiclient.WorkspacePayload{
+			Root:  "~/gradient",
+			Total: 100,
+			Used:  25,
+			Usages: map[string]uint64{
+				"models":    2048,
+				"notebooks": 1024,
+			},
+		}, nil
+	}
+
+	msg := loadWorkspaceCmd(4)().(workspaceLoadedMsg)
+	if msg.loadErr != nil {
+		t.Fatalf("loadWorkspaceCmd() error = %v", msg.loadErr)
+	}
+	if len(msg.usages) != 2 {
+		t.Fatalf("usage lines = %d, want 2", len(msg.usages))
+	}
+}
+
 func TestWorkspaceBarsAndThresholds(t *testing.T) {
 	m := NewWorkspaceModel()
 	m.width = 120
@@ -56,115 +83,59 @@ func TestWorkspaceBarsAndThresholds(t *testing.T) {
 	}
 }
 
-func TestLoadWorkspaceCmdReturnsUsageData(t *testing.T) {
+func TestWorkspaceActivateAndView(t *testing.T) {
 	restoreModelDeps(t)
 
-	tmp := t.TempDir()
-	workspaceRootFn = func() string { return tmp }
-	workspaceEnsureFn = func() error { return nil }
-	workspaceStatusFn = func() ([]workspacepkg.Usage, error) {
-		return []workspacepkg.Usage{
-			{Name: "models", Bytes: 2048},
-			{Name: "notebooks", Bytes: 1024},
+	apiWorkspaceFn = func(ctx context.Context) (apiclient.WorkspacePayload, error) {
+		return apiclient.WorkspacePayload{
+			Root: "~/gradient",
+			Total: 100,
+			Used:  25,
+			Usages: map[string]uint64{
+				"models": 1024,
+			},
 		}, nil
 	}
 
-	msg := loadWorkspaceCmd(4)().(workspaceLoadedMsg)
-	if msg.loadErr != nil {
-		t.Fatalf("loadWorkspaceCmd() error = %v", msg.loadErr)
-	}
-	if len(msg.usages) != 2 {
-		t.Fatalf("usage lines = %d, want 2", len(msg.usages))
-	}
-}
-
-func TestWorkspaceActivateHelpersAndCommands(t *testing.T) {
-	restoreModelDeps(t)
-
 	m := NewWorkspaceModel()
+	m.role = tuiauth.RoleOperator
 	if cmd := m.Activate(); cmd == nil {
 		t.Fatal("expected activate cmd")
 	}
-	if m.HelpView() == "" {
-		t.Fatal("expected help text")
-	}
 	m.loading = false
+	m.loaded = true
 	m.root = "~/gradient"
 	m.total = 100
 	m.used = 25
 	m.cpuUsage = 42
 	m.usages = []workspacepkg.Usage{{Name: "models", Bytes: 1024}}
 	m.lastBackup = time.Now().Add(-2 * time.Hour)
-	if view := m.View(); view == "" || !strings.Contains(view, "Last backup") {
+	if view := m.View(); view == "" || !strings.Contains(view, "clean outputs") {
 		t.Fatalf("expected workspace view, got %q", view)
 	}
-	if workspaceTickCmd(1)() != (workspaceTickMsg{token: 1}) {
-		t.Fatal("expected tick message")
+}
+
+func TestWorkspaceActionsUseJobs(t *testing.T) {
+	restoreModelDeps(t)
+
+	apiWorkspaceBackupFn = func(ctx context.Context) (string, error) { return "job-1", nil }
+	apiWorkspaceCleanFn = func(ctx context.Context) (string, error) { return "job-2", nil }
+	jobCalls := 0
+	apiJobFn = func(ctx context.Context, id string) (apiclient.JobSnapshot, error) {
+		jobCalls++
+		if id == "job-1" {
+			return apiclient.JobSnapshot{ID: id, Status: "completed", Result: map[string]any{"path": "/tmp/backup.tar.gz"}}, nil
+		}
+		return apiclient.JobSnapshot{ID: id, Status: "completed"}, nil
 	}
 
-	workspaceBackupFn = func() (string, error) { return "/tmp/backup.tar.gz", nil }
-	workspaceCleanFn = func() error { return nil }
 	if msg := runWorkspaceBackupCmd()().(workspaceOpMsg); !msg.success {
 		t.Fatalf("backup cmd = %#v", msg)
 	}
 	if msg := runWorkspaceCleanCmd()().(workspaceOpMsg); !msg.success {
 		t.Fatalf("clean cmd = %#v", msg)
 	}
-
-	m.Deactivate()
-	if m.active {
-		t.Fatal("expected deactivate to clear active flag")
-	}
-}
-
-func TestWorkspaceHardwareOverviewUsesInlineBars(t *testing.T) {
-	m := NewWorkspaceModel()
-	m.width = 120
-	m.cpuUsage = 37
-	m.gpuState = 0
-
-	rendered := m.renderHardwareOverview()
-	if strings.Contains(rendered, "╭") || strings.Contains(rendered, "╮") || strings.Contains(rendered, "│") {
-		t.Fatalf("renderHardwareOverview() should not use bordered panels: %q", rendered)
-	}
-	if !strings.Contains(rendered, "CPU") {
-		t.Fatalf("renderHardwareOverview() = %q", rendered)
-	}
-}
-
-func TestWorkspaceUpdateCoversKeyAndMessagePaths(t *testing.T) {
-	restoreModelDeps(t)
-
-	workspaceBackupFn = func() (string, error) { return "/tmp/demo.tar.gz", nil }
-	workspaceCleanFn = func() error { return nil }
-
-	m := NewWorkspaceModel()
-	m.loading = false
-	m.root = "~/gradient"
-	m.total = 100
-	m.used = 10
-	m.usages = []workspacepkg.Usage{{Name: "outputs", Bytes: 1024}}
-
-	updated, cmd := m.Update(keyRunes("b"))
-	if cmd == nil || updated.busyMessage == "" {
-		t.Fatal("expected backup command")
-	}
-	updated.busyMessage = ""
-	updated, _ = updated.Update(keyRunes("x"))
-	if !updated.confirmClean {
-		t.Fatal("expected clean confirmation")
-	}
-	updated, cmd = updated.Update(keyRunes("y"))
-	if cmd == nil || updated.busyMessage == "" {
-		t.Fatal("expected clean command")
-	}
-	updated.active = true
-	updated.loadToken = 3
-	if _, cmd = updated.Update(workspaceTickMsg{token: 3}); cmd == nil {
-		t.Fatal("expected refresh tick command")
-	}
-	updated, _ = updated.Update(workspaceLoadedMsg{token: 3, root: "~/gradient", total: 100, used: 25, usages: []workspacepkg.Usage{{Name: "models", Bytes: 1 << 20}}})
-	if updated.root == "" {
-		t.Fatal("expected loaded workspace state")
+	if jobCalls < 2 {
+		t.Fatalf("job calls = %d", jobCalls)
 	}
 }

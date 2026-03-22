@@ -10,9 +10,9 @@ UI layer and the terminal interaction model.
 ## What This Repo Contains
 
 - the `concave-tui` Bubble Tea application
-- the backend packages the TUI needs to manage suites, workspace state, Docker,
-  and GPU checks without depending on `concave/internal/*`
-- Compose templates required for suite-aware views and lifecycle actions
+- a sessioned client for `concave serve`
+- role-aware Workspace, Suites, Logs, Doctor, System, and Users views
+- local hardware/workspace rendering helpers that complement the authenticated API
 
 ## Build
 
@@ -24,13 +24,13 @@ CGO_ENABLED=0 go build -o concave-tui ./cmd/concave-tui/
 
 ## Runtime Expectations
 
-- Docker Engine available locally
-- a writable `~/gradient/` workspace
+- a reachable `concave serve` instance
+- a valid cached session or valid Gradient Linux credentials for login
 - a terminal with ANSI support
 
 ## Relationship to concave
 
 - `concave` remains the infrastructure/backend project
 - `concave-tui` is the terminal frontend project
-- the two repos can evolve independently without pulling Bubble Tea dependencies
-  into headless infrastructure builds
+- `concave-tui` authenticates against `concave serve` instead of owning privileged backend logic locally
+- the two repos can evolve independently without pulling Bubble Tea dependencies into headless infrastructure builds

@@ -8,22 +8,23 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
 )
 
 func restoreMainDeps(t *testing.T) {
 	t.Helper()
 
 	oldTerminalSupported := terminalSupportedFn
-	oldDockerRunning := dockerRunningFn
 	oldLoadConfig := loadConfigFn
+	oldLoadSession := loadSessionFn
 	oldExitProgram := exitProgram
 	oldRunProgram := runProgramFn
 	oldVersion := Version
 
 	t.Cleanup(func() {
 		terminalSupportedFn = oldTerminalSupported
-		dockerRunningFn = oldDockerRunning
 		loadConfigFn = oldLoadConfig
+		loadSessionFn = oldLoadSession
 		exitProgram = oldExitProgram
 		runProgramFn = oldRunProgram
 		Version = oldVersion
@@ -52,22 +53,12 @@ func TestRunRejectsUnsupportedTerminal(t *testing.T) {
 	}
 }
 
-func TestRunRejectsDockerUnavailable(t *testing.T) {
-	restoreMainDeps(t)
-	terminalSupportedFn = func() bool { return true }
-	dockerRunningFn = func() (bool, error) { return false, errors.New("down") }
-
-	if code := run(nil); code != 1 {
-		t.Fatalf("run() = %d, want 1", code)
-	}
-}
-
 func TestRunLaunchesProgram(t *testing.T) {
 	restoreMainDeps(t)
 
 	terminalSupportedFn = func() bool { return true }
-	dockerRunningFn = func() (bool, error) { return true, nil }
 	loadConfigFn = func() (tuiconfig.Config, error) { return tuiconfig.DefaultConfig(), nil }
+	loadSessionFn = func() (tuiauth.Session, error) { return tuiauth.Session{}, errors.New("missing") }
 
 	called := false
 	runProgramFn = func(root tea.Model) error {
@@ -90,7 +81,6 @@ func TestRunRejectsPositionalArgumentsAndConfigError(t *testing.T) {
 	}
 
 	terminalSupportedFn = func() bool { return true }
-	dockerRunningFn = func() (bool, error) { return true, nil }
 	loadConfigFn = func() (tuiconfig.Config, error) { return tuiconfig.Config{}, errors.New("config failed") }
 	if code := run(nil); code != 1 {
 		t.Fatalf("run() = %d, want 1", code)

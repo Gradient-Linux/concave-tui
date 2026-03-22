@@ -10,7 +10,7 @@ import (
 
 	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
 	"github.com/Gradient-Linux/concave-tui/cmd/concave-tui/model"
-	"github.com/Gradient-Linux/concave-tui/internal/system"
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
 )
 
 // Version is injected at build time.
@@ -18,8 +18,8 @@ var Version = "dev"
 
 var (
 	terminalSupportedFn = terminalSupported
-	dockerRunningFn     = system.DockerRunning
 	loadConfigFn        = tuiconfig.Load
+	loadSessionFn       = tuiauth.LoadSession
 	exitProgram         = os.Exit
 	runProgramFn        = func(root tea.Model) error {
 		program := tea.NewProgram(root, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -67,21 +67,17 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "concave-tui requires an interactive ANSI terminal")
 		return 1
 	}
-	if ok, err := dockerRunningFn(); err != nil || !ok {
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Docker is not running:", err)
-		} else {
-			fmt.Fprintln(os.Stderr, "Docker is not running")
-		}
-		return 1
-	}
 	cfg, err := loadConfigFn()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
 	}
+	session, err := loadSessionFn()
+	if err != nil {
+		session = tuiauth.Session{}
+	}
 
-	root := model.NewRootModel(Version, cfg)
+	root := model.NewRootModel(Version, cfg, session)
 	if err := runProgramFn(root); err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1

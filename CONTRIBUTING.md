@@ -28,13 +28,15 @@ Approved direct dependencies:
 - `github.com/charmbracelet/bubbletea`
 - `github.com/charmbracelet/lipgloss`
 - `github.com/charmbracelet/bubbles`
+- `github.com/gorilla/websocket`
 
 New direct dependencies require maintainer approval.
 
 ## Project Boundaries
 
 - `concave-tui` owns the terminal UI layer
-- `concave` owns the infrastructure CLI and headless-safe backend concerns
+- `concave` owns auth, role resolution, and machine control
+- `concave-tui` consumes `concave serve`; it does not duplicate backend authority
 - Do not move Bubble Tea or UI rendering code back into the `concave` repository
 
 ## Pull Requests

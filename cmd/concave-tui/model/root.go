@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	tuiconfig "github.com/Gradient-Linux/concave-tui/cmd/concave-tui/config"
+	tuiauth "github.com/Gradient-Linux/concave-tui/internal/auth"
 	cfgstore "github.com/Gradient-Linux/concave-tui/internal/config"
 	"github.com/Gradient-Linux/concave-tui/internal/docker"
 	"github.com/Gradient-Linux/concave-tui/internal/gpu"
@@ -98,6 +99,8 @@ const (
 	ViewSuites
 	ViewLogs
 	ViewDoctor
+	ViewSystem
+	ViewUsers
 )
 
 type SidebarState int
@@ -114,10 +117,13 @@ type rootConfigSavedMsg struct {
 type RootModel struct {
 	activeView   View
 	sidebar      SidebarState
+	login        LoginModel
 	suites       SuitesModel
 	logs         LogsModel
 	workspace    WorkspaceModel
 	doctor       DoctorModel
+	system       SystemModel
+	users        UsersModel
 	settings     SettingsModel
 	width        int
 	height       int
@@ -127,6 +133,7 @@ type RootModel struct {
 	version      string
 	cfg          tuiconfig.Config
 	lastKey      string
+	session      tuiauth.Session
 }
 
 func init() {
@@ -148,27 +155,41 @@ func init() {
 	})
 }
 
-func NewRootModel(version string, cfgs ...tuiconfig.Config) *RootModel {
+func NewRootModel(version string, cfgs ...any) *RootModel {
 	cfg := tuiconfig.DefaultConfig()
-	if len(cfgs) > 0 {
-		cfg = cfgs[0]
+	var session tuiauth.Session
+	for _, item := range cfgs {
+		switch typed := item.(type) {
+		case tuiconfig.Config:
+			cfg = typed
+		case tuiauth.Session:
+			session = typed
+		}
 	}
 	m := &RootModel{
 		activeView: ViewWorkspace,
 		sidebar:    sidebarStateFromConfig(cfg),
+		login:      NewLoginModel(),
 		suites:     NewSuitesModel(),
 		logs:       NewLogsModel(),
 		workspace:  NewWorkspaceModel(),
 		doctor:     NewDoctorModel(),
+		system:     NewSystemModel(),
+		users:      NewUsersModel(),
 		settings:   NewSettingsModel(cfg),
 		version:    version,
 		cfg:        cfg,
+		session:    session,
 	}
 	m.applyConfig(cfg)
+	m.applySession(session)
 	return m
 }
 
 func (m *RootModel) Init() tea.Cmd {
+	if m.session.Token == "" {
+		return m.login.Activate()
+	}
 	return m.activateView(m.activeView)
 }
 
@@ -179,6 +200,12 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.applyLayout()
 		return m, nil
+	case loginSuccessMsg:
+		m.applySession(msg.session)
+		if err := saveSessionFn(msg.session); err != nil {
+			m.err = err
+		}
+		return m, m.activateView(m.activeView)
 	case rootConfigSavedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -196,6 +223,12 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settings.SetConfig(m.cfg)
 		m.workspace.SetConfig(m.cfg)
 		return m, nil
+	}
+
+	if m.session.Token == "" {
+		var cmd tea.Cmd
+		m.login, cmd = m.login.Update(msg)
+		return m, cmd
 	}
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -221,11 +254,18 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs, cmd = m.logs.Update(msg)
 	case ViewDoctor:
 		m.doctor, cmd = m.doctor.Update(msg)
+	case ViewSystem:
+		m.system, cmd = m.system.Update(msg)
+	case ViewUsers:
+		m.users, cmd = m.users.Update(msg)
 	}
 	return m, cmd
 }
 
 func (m *RootModel) View() string {
+	if m.session.Token == "" {
+		return m.login.View()
+	}
 	if m.width > 0 && m.width < minWidth {
 		return "Terminal too narrow — resize to at least 80 columns"
 	}
@@ -241,6 +281,16 @@ func (m *RootModel) View() string {
 		return m.renderModal(frame, m.helpOverlay())
 	}
 	return frame
+}
+
+func (m *RootModel) applySession(session tuiauth.Session) {
+	m.session = session
+	setClientSession(session)
+	m.suites.SetRole(session.Role)
+	m.workspace.SetRole(session.Role)
+	m.doctor.SetRole(session.Role)
+	m.system.SetRole(session.Role)
+	m.users.SetRole(session.Role)
 }
 
 func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -273,10 +323,18 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, m.switchView(ViewLogs)
 	case "4":
 		return true, m.switchView(ViewDoctor)
+	case "5":
+		if m.session.Role >= tuiauth.RoleAdmin {
+			return true, m.switchView(ViewSystem)
+		}
+	case "6":
+		if m.session.Role >= tuiauth.RoleAdmin {
+			return true, m.switchView(ViewUsers)
+		}
 	case "tab":
-		return true, m.switchView(nextVisibleView(m.activeView, 1))
+		return true, m.switchView(m.nextVisibleView(m.activeView, 1))
 	case "shift+tab":
-		return true, m.switchView(nextVisibleView(m.activeView, -1))
+		return true, m.switchView(m.nextVisibleView(m.activeView, -1))
 	case "ctrl+b":
 		if m.showSettings {
 			return false, nil
@@ -366,6 +424,10 @@ func (m *RootModel) deactivateView(view View) {
 		m.logs.Deactivate()
 	case ViewDoctor:
 		m.doctor.Deactivate()
+	case ViewSystem:
+		m.system.Deactivate()
+	case ViewUsers:
+		m.users.Deactivate()
 	}
 }
 
@@ -379,6 +441,10 @@ func (m *RootModel) activateView(view View) tea.Cmd {
 		return m.logs.Activate()
 	case ViewDoctor:
 		return m.doctor.Activate()
+	case ViewSystem:
+		return m.system.Activate()
+	case ViewUsers:
+		return m.users.Activate()
 	default:
 		return nil
 	}
@@ -398,6 +464,9 @@ func (m *RootModel) applyLayout() {
 	m.logs.SetSize(contentWidth, contentHeight)
 	m.workspace.SetSize(contentWidth, contentHeight)
 	m.doctor.SetSize(contentWidth, contentHeight)
+	m.system.SetSize(contentWidth, contentHeight)
+	m.users.SetSize(contentWidth, contentHeight)
+	m.login.SetSize(max(minWidth, m.width), max(24, m.height))
 	m.settings.SetSize(max(56, min(contentWidth, 78)), max(18, min(contentHeight, 22)))
 }
 
@@ -445,7 +514,7 @@ func (m *RootModel) contentView() string {
 
 func (m *RootModel) sidebarView() string {
 	lines := make([]string, 0, 7)
-	for _, view := range visibleViews() {
+	for _, view := range m.visibleViews() {
 		active := view == m.activeView
 		icon := sidebarIcon(view)
 		label := sidebarLabel(view)
@@ -478,6 +547,10 @@ func (m *RootModel) activeContent() string {
 		return m.logs.View()
 	case ViewDoctor:
 		return m.doctor.View()
+	case ViewSystem:
+		return m.system.View()
+	case ViewUsers:
+		return m.users.View()
 	default:
 		return ""
 	}
@@ -503,7 +576,7 @@ func (m *RootModel) activeHelp() string {
 		"G              jump to bottom",
 		"ctrl+d / u     scroll half page",
 		"ctrl+f / b     scroll full page",
-		"1-4            switch view",
+		"1-6            switch view",
 		"",
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Actions (" + sidebarLabel(m.activeView) + " view)"),
 	}
@@ -523,22 +596,41 @@ func (m *RootModel) activeHelp() string {
 func (m *RootModel) activeHelpActions() []string {
 	switch m.activeView {
 	case ViewWorkspace:
-		return []string{
-			"b              backup notebooks + models",
-			"x              clean outputs",
-			"r              refresh workspace",
+		actions := []string{"r              refresh workspace"}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionBackup) {
+			actions = append([]string{"b              backup notebooks + models"}, actions...)
 		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionClean) {
+			actions = append(actions, "x              clean outputs")
+		}
+		return actions
 	case ViewSuites:
-		return []string{
-			"i              install suite",
-			"r              remove suite",
-			"u              update suite",
-			"R              rollback suite",
-			"s / x          start / stop suite",
-			"b              shell into suite",
-			"e              exec command in suite",
-			"l              open JupyterLab",
+		actions := []string{}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionInstall) {
+			actions = append(actions, "i              install suite")
 		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionRemove) {
+			actions = append(actions, "r              remove suite")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionUpdate) {
+			actions = append(actions, "u              update suite")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionRollback) {
+			actions = append(actions, "R              rollback suite")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionStart) || tuiauth.Can(m.session.Role, tuiauth.ActionStop) {
+			actions = append(actions, "s / x          start / stop suite")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionShell) {
+			actions = append(actions, "b              shell into suite")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionExec) {
+			actions = append(actions, "e              exec command in suite")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionOpenLab) {
+			actions = append(actions, "l              open JupyterLab")
+		}
+		return actions
 	case ViewLogs:
 		return []string{
 			"/              search logs",
@@ -548,6 +640,17 @@ func (m *RootModel) activeHelpActions() []string {
 	case ViewDoctor:
 		return []string{
 			"r              rerun checks",
+		}
+	case ViewSystem:
+		return []string{
+			"r              reboot",
+			"x              shutdown",
+			"d              restart docker",
+		}
+	case ViewUsers:
+		return []string{
+			"j / k          move up / down",
+			"enter          expand user containers",
 		}
 	default:
 		return nil
@@ -681,8 +784,12 @@ func sidebarStateFromConfig(cfg tuiconfig.Config) SidebarState {
 	return SidebarExpanded
 }
 
-func visibleViews() []View {
-	return []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor}
+func (m RootModel) visibleViews() []View {
+	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor}
+	if m.session.Role >= tuiauth.RoleAdmin {
+		views = append(views, ViewSystem, ViewUsers)
+	}
+	return views
 }
 
 func nextPresetName(cfg tuiconfig.Config) string {
@@ -699,8 +806,8 @@ func nextPresetName(cfg tuiconfig.Config) string {
 	return names[0]
 }
 
-func nextVisibleView(current View, delta int) View {
-	views := visibleViews()
+func (m RootModel) nextVisibleView(current View, delta int) View {
+	views := m.visibleViews()
 	if len(views) == 0 {
 		return current
 	}
@@ -728,6 +835,10 @@ func sidebarIcon(view View) string {
 		return "󰈙"
 	case ViewDoctor:
 		return "󰓙"
+	case ViewSystem:
+		return "󰑓"
+	case ViewUsers:
+		return "󰀄"
 	default:
 		return "•"
 	}
@@ -743,6 +854,10 @@ func sidebarLabel(view View) string {
 		return "Logs"
 	case ViewDoctor:
 		return "Doctor"
+	case ViewSystem:
+		return "System"
+	case ViewUsers:
+		return "Users"
 	default:
 		return ""
 	}
