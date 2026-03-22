@@ -30,7 +30,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-boost-track:
-    image: ghcr.io/mlflow/mlflow:2.14
+    image: ghcr.io/mlflow/mlflow:v2.14.1
     restart: unless-stopped
     profiles: ["disabled"]
     ports:
@@ -53,7 +53,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-neural-infer:
-    image: nvidia/cuda:12.4-runtime-ubuntu24.04
+    image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     command: ["sleep", "infinity"]
     restart: unless-stopped
     profiles: ["disabled"]
@@ -81,7 +81,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-flow-mlflow:
-    image: ghcr.io/mlflow/mlflow:2.14
+    image: ghcr.io/mlflow/mlflow:v2.14.1
     restart: unless-stopped
     profiles: ["disabled"]
     ports:
@@ -138,7 +138,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-flow-serve:
-    image: bentoml/bentoml:1.2.0
+    image: bentoml/model-server:latest
     command: ["sleep", "infinity"]
     restart: unless-stopped
     profiles: ["disabled"]

@@ -70,6 +70,10 @@ type SuitesModel struct {
 	active        bool
 	loading       bool
 	selected      int
+	forgePrompt   bool
+	forgeCursor   int
+	forgeOptions  []suite.ForgeOption
+	forgeSelected map[string]bool
 	confirmRemove bool
 	confirmUpdate bool
 	execPrompt    bool
@@ -105,6 +109,48 @@ func (m *SuitesModel) SetSize(width, height int) {
 }
 
 func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
+	if m.forgePrompt {
+		switch typed := msg.(type) {
+		case tea.KeyMsg:
+			switch typed.String() {
+			case "esc", "n":
+				m.forgePrompt = false
+				m.lastErr = nil
+				return m, nil
+			case "up", "k":
+				if m.forgeCursor > 0 {
+					m.forgeCursor--
+				}
+				return m, nil
+			case "down", "j":
+				if m.forgeCursor < len(m.forgeOptions)-1 {
+					m.forgeCursor++
+				}
+				return m, nil
+			case " ":
+				if len(m.forgeOptions) > 0 {
+					key := m.forgeOptions[m.forgeCursor].Key
+					if m.forgeSelected[key] {
+						delete(m.forgeSelected, key)
+					} else {
+						m.forgeSelected[key] = true
+					}
+				}
+				return m, nil
+			case "enter", "y":
+				selection, err := m.selectedForgeSelection()
+				if err != nil {
+					m.lastErr = err
+					return m, nil
+				}
+				m.forgePrompt = false
+				m.lastErr = nil
+				return m, m.startOperation("install", selection)
+			}
+		}
+		return m, nil
+	}
+
 	if m.execPrompt {
 		var cmd tea.Cmd
 		switch typed := msg.(type) {
@@ -208,6 +254,17 @@ func (m SuitesModel) Update(msg tea.Msg) (SuitesModel, tea.Cmd) {
 				return m, m.startOperation("update")
 			}
 		case "i":
+			if row := m.currentRow(); row.Name == "forge" && !row.Installed {
+				m.forgePrompt = true
+				m.forgeCursor = 0
+				m.forgeOptions = suiteForgeOptionsFn()
+				if m.forgeSelected == nil {
+					m.forgeSelected = make(map[string]bool)
+				}
+				clear(m.forgeSelected)
+				m.lastErr = nil
+				return m, nil
+			}
 			return m, m.startOperation("install")
 		case "u":
 			if m.currentRow().Installed {
@@ -257,6 +314,9 @@ func (m SuitesModel) View() string {
 		leftLines = append(leftLines, style.Render(fmt.Sprintf("%s %-10s %-12s", prefix, row.Name, row.State)))
 	}
 	rightLines := m.detailView(m.currentRow())
+	if m.forgePrompt {
+		rightLines = m.renderForgePicker()
+	}
 	if m.confirmUpdate {
 		rightLines = append(rightLines, "", "Update "+m.currentRow().Name+"?", "")
 		rightLines = append(rightLines, m.updatePreview...)
@@ -335,6 +395,10 @@ func (m SuitesModel) detailView(row suiteRow) []string {
 		for _, mount := range row.Detail.Suite.Volumes {
 			lines = append(lines, fmt.Sprintf("  %s -> %s", mount.HostPath, mount.ContainerPath))
 		}
+	}
+	if row.Name == "forge" && !row.Installed {
+		lines = append(lines, "", "[i]install custom selection")
+		return lines
 	}
 	lines = append(lines, "", "[i]install [r]remove [u]update [R]rollback", "[s]start   [x]stop   [b]shell  [e]exec [l]lab")
 	return lines
@@ -427,7 +491,7 @@ func loadSuitesCmd() tea.Cmd {
 	}
 }
 
-func (m *SuitesModel) startOperation(kind string) tea.Cmd {
+func (m *SuitesModel) startOperation(kind string, forgeSelections ...suite.ForgeSelection) tea.Cmd {
 	if len(m.rows) == 0 || m.opCh != nil {
 		return nil
 	}
@@ -440,9 +504,14 @@ func (m *SuitesModel) startOperation(kind string) tea.Cmd {
 	m.opTotal = 0
 	m.opLabel = ""
 	name := m.currentRow().Name
+	var forgeSelection *suite.ForgeSelection
+	if len(forgeSelections) > 0 {
+		selected := forgeSelections[0]
+		forgeSelection = &selected
+	}
 	go func() {
 		defer close(ch)
-		runSuiteOperation(kind, name, ch)
+		runSuiteOperation(kind, name, forgeSelection, ch)
 	}()
 	return waitForSuiteOperation(ch)
 }
@@ -454,7 +523,7 @@ func waitForSuiteOperation(ch <-chan suiteOperationMsg) tea.Cmd {
 	}
 }
 
-func runSuiteOperation(kind, name string, ch chan<- suiteOperationMsg) {
+func runSuiteOperation(kind, name string, forgeSelection *suite.ForgeSelection, ch chan<- suiteOperationMsg) {
 	send := func(line string) { ch <- suiteOperationMsg{line: line} }
 	progress := func(label string, step, total int) {
 		ch <- suiteOperationMsg{progressLabel: label, progressStep: step, progressTotal: total}
@@ -464,7 +533,7 @@ func runSuiteOperation(kind, name string, ch chan<- suiteOperationMsg) {
 
 	switch kind {
 	case "install":
-		failOrDone(performInstall(name, send, progress), name+" installed", fail, done)
+		failOrDone(performInstall(name, forgeSelection, send, progress), name+" installed", fail, done)
 	case "update":
 		failOrDone(performUpdate(name, send, progress), name+" updated", fail, done)
 	case "rollback":
@@ -499,7 +568,7 @@ func failOrDone(err error, note string, fail func(error), done func(string)) {
 	done(note)
 }
 
-func performInstall(name string, send func(string), progressFns ...func(string, int, int)) error {
+func performInstall(name string, forgeSelection *suite.ForgeSelection, send func(string), progressFns ...func(string, int, int)) error {
 	progress := func(string, int, int) {}
 	if len(progressFns) > 0 && progressFns[0] != nil {
 		progress = progressFns[0]
@@ -515,6 +584,19 @@ func performInstall(name string, send func(string), progressFns ...func(string, 
 	if installed {
 		send("already installed")
 		return nil
+	}
+	if name == "forge" {
+		selected := forgeSelection
+		if selected == nil {
+			picked, err := suitePickForgeFn()
+			if err != nil {
+				return err
+			}
+			selected = &picked
+		}
+		s.Containers = selected.Containers
+		s.Ports = selected.Ports
+		s.Volumes = selected.Volumes
 	}
 	if s.GPURequired {
 		state, err := gpuDetectFn()
@@ -852,6 +934,38 @@ func cleanupSuiteContainers(ctx context.Context, name string) error {
 		}
 	}
 	return nil
+}
+
+func (m SuitesModel) renderForgePicker() []string {
+	lines := []string{
+		"forge   custom install",
+		"",
+		"Select the Forge components you want to install.",
+		"",
+	}
+	for idx, option := range m.forgeOptions {
+		cursor := " "
+		if idx == m.forgeCursor {
+			cursor = "►"
+		}
+		marker := "□"
+		if m.forgeSelected[option.Key] {
+			marker = "■"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s %s", cursor, marker, option.Label))
+	}
+	lines = append(lines, "", "[space] toggle  [enter] install  [esc] cancel")
+	return lines
+}
+
+func (m SuitesModel) selectedForgeSelection() (suite.ForgeSelection, error) {
+	keys := make([]string, 0, len(m.forgeSelected))
+	for _, option := range m.forgeOptions {
+		if m.forgeSelected[option.Key] {
+			keys = append(keys, option.Key)
+		}
+	}
+	return suiteForgeSelectFn(keys)
 }
 
 func (m SuitesModel) openShell() tea.Cmd {

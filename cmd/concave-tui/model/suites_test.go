@@ -50,7 +50,7 @@ func TestPerformInstallSuccess(t *testing.T) {
 	}
 
 	var progress []string
-	if err := performInstall("boosting", func(line string) { progress = append(progress, line) }); err != nil {
+	if err := performInstall("boosting", nil, func(line string) { progress = append(progress, line) }); err != nil {
 		t.Fatalf("performInstall() error = %v", err)
 	}
 	if !composeWritten {
@@ -86,7 +86,7 @@ func TestPerformInstallStopsBeforeComposeOnPullFailure(t *testing.T) {
 		return "", nil
 	}
 
-	err := performInstall("boosting", func(string) {})
+	err := performInstall("boosting", nil, func(string) {})
 	if err == nil {
 		t.Fatal("expected install error")
 	}
@@ -106,7 +106,7 @@ func TestLoadSuitesCmdReflectsInstalledState(t *testing.T) {
 			"boosting": {
 				"gradient-boost-core":  {Current: "python:3.12-slim", Previous: "python:3.11-slim"},
 				"gradient-boost-lab":   {Current: "custom/jupyter"},
-				"gradient-boost-track": {Current: "ghcr.io/mlflow/mlflow:2.14"},
+				"gradient-boost-track": {Current: "ghcr.io/mlflow/mlflow:v2.14.1"},
 			},
 		}, nil
 	}
@@ -317,7 +317,29 @@ func TestPerformInstallIgnoresStaleForgeConflict(t *testing.T) {
 	saveManifestFn = func(manifest cfgstore.VersionManifest) error { return nil }
 	addSuiteFn = func(name string) error { return nil }
 
-	if err := performInstall("boosting", func(string) {}); err != nil {
+	if err := performInstall("boosting", nil, func(string) {}); err != nil {
+		t.Fatalf("performInstall() error = %v", err)
+	}
+}
+
+func TestPerformInstallUsesForgeSelection(t *testing.T) {
+	restoreModelDeps(t)
+
+	isInstalledFn = func(name string) (bool, error) { return false, nil }
+	loadStateFn = func() (cfgstore.State, error) { return cfgstore.State{}, nil }
+	loadManifestFn = func() (cfgstore.VersionManifest, error) { return cfgstore.VersionManifest{}, nil }
+	dockerTagPreviousFn = func(image string) error { return nil }
+	dockerPullStreamFn = func(ctx context.Context, image string, cb func(string)) error { return nil }
+	dockerWriteRawFn = func(name string, data []byte) (string, error) { return "/tmp/" + name + ".compose.yml", nil }
+	saveManifestFn = func(manifest cfgstore.VersionManifest) error { return nil }
+	addSuiteFn = func(name string) error { return nil }
+
+	selection := suite.ForgeSelection{
+		Containers: []suite.Container{{Name: "gradient-boost-core", Image: "python:3.12-slim"}},
+		Volumes:    []suite.VolumeMount{{HostPath: "data", ContainerPath: "/data"}},
+	}
+
+	if err := performInstall("forge", &selection, func(string) {}); err != nil {
 		t.Fatalf("performInstall() error = %v", err)
 	}
 }
@@ -395,7 +417,7 @@ func TestSuiteOperationHelpersAndInteractiveCommands(t *testing.T) {
 	}
 
 	opCh := make(chan suiteOperationMsg, 4)
-	runSuiteOperation("start", "boosting", opCh)
+	runSuiteOperation("start", "boosting", nil, opCh)
 	if len(opCh) == 0 {
 		t.Fatal("expected operation messages")
 	}
@@ -405,7 +427,7 @@ func TestSuiteOperationHelpersAndInteractiveCommands(t *testing.T) {
 	}
 	systemOpenURLFn = func(url string) error { return nil }
 	opCh = make(chan suiteOperationMsg, 4)
-	runSuiteOperation("lab", "boosting", opCh)
+	runSuiteOperation("lab", "boosting", nil, opCh)
 	if len(opCh) == 0 {
 		t.Fatal("expected lab operation messages")
 	}

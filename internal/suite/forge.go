@@ -17,6 +17,12 @@ type ForgeSelection struct {
 	Volumes    []VolumeMount
 }
 
+// ForgeOption is a selectable Forge component exposed to the TUI layer.
+type ForgeOption struct {
+	Key   string
+	Label string
+}
+
 type forgeComponent struct {
 	Key       string
 	Label     string
@@ -140,6 +146,40 @@ func PickComponents() (ForgeSelection, error) {
 		components = append(components, component)
 	}
 
+	return selectionFromComponents(components, nil)
+}
+
+// ForgeOptions returns the selectable Forge components in stable order.
+func ForgeOptions() []ForgeOption {
+	options := make([]ForgeOption, 0, len(forgeComponents))
+	for _, component := range forgeComponents {
+		options = append(options, ForgeOption{
+			Key:   component.Key,
+			Label: component.Label,
+		})
+	}
+	return options
+}
+
+// SelectionFromKeys rebuilds a Forge selection from component keys.
+func SelectionFromKeys(keys []string) (ForgeSelection, error) {
+	if len(keys) == 0 {
+		return ForgeSelection{}, fmt.Errorf("no components selected")
+	}
+
+	componentByKey := make(map[string]forgeComponent, len(forgeComponents))
+	for _, component := range forgeComponents {
+		componentByKey[component.Key] = component
+	}
+
+	components := make([]forgeComponent, 0, len(keys))
+	for _, key := range keys {
+		component, ok := componentByKey[key]
+		if !ok {
+			continue
+		}
+		components = append(components, component)
+	}
 	return selectionFromComponents(components, nil)
 }
 

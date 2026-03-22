@@ -30,7 +30,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-boost-track:
-    image: ghcr.io/mlflow/mlflow:2.14
+    image: ghcr.io/mlflow/mlflow:v2.14.1
     command: ["mlflow", "ui", "--host", "0.0.0.0", "--port", "5000", "--backend-store-uri", "/mlruns"]
     restart: unless-stopped
     ports:

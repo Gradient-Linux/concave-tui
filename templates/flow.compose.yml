@@ -3,7 +3,7 @@
 # Variables substituted at install time by internal/docker/compose.go
 services:
   gradient-flow-mlflow:
-    image: ghcr.io/mlflow/mlflow:2.14
+    image: ghcr.io/mlflow/mlflow:v2.14.1
     command: ["mlflow", "ui", "--host", "0.0.0.0", "--port", "5000", "--backend-store-uri", "/mlruns"]
     restart: unless-stopped
     ports:
@@ -57,7 +57,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-flow-serve:
-    image: bentoml/bentoml:1.2.0
+    image: bentoml/model-server:latest
     command: ["sleep", "infinity"]
     restart: unless-stopped
     ports:

@@ -36,6 +36,8 @@ func restoreModelDeps(t *testing.T) {
 	oldSuitePrimary := suitePrimaryFn
 	oldSuiteJupyter := suiteJupyterFn
 	oldSuiteSelection := suiteSelectionFn
+	oldSuiteForgeOptions := suiteForgeOptionsFn
+	oldSuiteForgeSelect := suiteForgeSelectFn
 	oldSuiteBuildForge := suiteBuildForgeFn
 	oldSuitePickForge := suitePickForgeFn
 	oldDockerPull := dockerPullFn
@@ -89,6 +91,8 @@ func restoreModelDeps(t *testing.T) {
 		suitePrimaryFn = oldSuitePrimary
 		suiteJupyterFn = oldSuiteJupyter
 		suiteSelectionFn = oldSuiteSelection
+		suiteForgeOptionsFn = oldSuiteForgeOptions
+		suiteForgeSelectFn = oldSuiteForgeSelect
 		suiteBuildForgeFn = oldSuiteBuildForge
 		suitePickForgeFn = oldSuitePickForge
 		dockerPullFn = oldDockerPull

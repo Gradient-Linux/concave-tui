@@ -21,7 +21,7 @@ services:
     networks: ["{{COMPOSE_NETWORK}}"]
 
   gradient-neural-infer:
-    image: nvidia/cuda:12.4-runtime-ubuntu24.04
+    image: nvidia/cuda:12.4.1-runtime-ubuntu22.04
     command: ["sleep", "infinity"]
     restart: unless-stopped
     ports:

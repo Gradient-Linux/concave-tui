@@ -96,6 +96,20 @@ func TestPickComponentsRejectsEmptySelection(t *testing.T) {
 	}
 }
 
+func TestForgeOptionsAndSelectionFromKeys(t *testing.T) {
+	options := ForgeOptions()
+	if len(options) == 0 {
+		t.Fatal("expected forge options")
+	}
+	selection, err := SelectionFromKeys([]string{"boosting-lab", "flow-mlflow"})
+	if err != nil {
+		t.Fatalf("SelectionFromKeys() error = %v", err)
+	}
+	if len(selection.Containers) == 0 || len(selection.Ports) == 0 {
+		t.Fatalf("SelectionFromKeys() = %#v", selection)
+	}
+}
+
 func TestBuildForgeComposeFiltersSelectedServices(t *testing.T) {
 	selection, err := SelectionFromContainerNames(
 		[]string{"gradient-boost-core", "gradient-flow-mlflow"},

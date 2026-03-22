@@ -55,6 +55,8 @@ var (
 	suitePrimaryFn       = suite.PrimaryContainer
 	suiteJupyterFn       = suite.JupyterContainer
 	suiteSelectionFn     = suite.SelectionFromContainerNames
+	suiteForgeOptionsFn  = suite.ForgeOptions
+	suiteForgeSelectFn   = suite.SelectionFromKeys
 	suiteBuildForgeFn    = suite.BuildForgeCompose
 	suitePickForgeFn     = suite.PickComponents
 	dockerPullFn         = docker.PullWithRollbackSafety

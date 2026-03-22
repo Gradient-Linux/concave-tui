@@ -42,7 +42,7 @@ var Registry = map[string]Suite{
 		Containers: []Container{
 			{Name: "gradient-boost-core", Image: "python:3.12-slim", Role: "Core ML stack"},
 			{Name: "gradient-boost-lab", Image: "quay.io/jupyter/base-notebook:python-3.11.6", Role: "JupyterLab"},
-			{Name: "gradient-boost-track", Image: "ghcr.io/mlflow/mlflow:2.14", Role: "MLflow tracking"},
+			{Name: "gradient-boost-track", Image: "ghcr.io/mlflow/mlflow:v2.14.1", Role: "MLflow tracking"},
 		},
 		Ports: []PortMapping{
 			{Port: 8888, Service: "JupyterLab"},
@@ -62,7 +62,7 @@ var Registry = map[string]Suite{
 		Name: "neural",
 		Containers: []Container{
 			{Name: "gradient-neural-torch", Image: "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime", Role: "Training"},
-			{Name: "gradient-neural-infer", Image: "nvidia/cuda:12.4-runtime-ubuntu24.04", Role: "Inference"},
+			{Name: "gradient-neural-infer", Image: "nvidia/cuda:12.4.1-runtime-ubuntu22.04", Role: "Inference"},
 			{Name: "gradient-neural-lab", Image: "quay.io/jupyter/base-notebook:python-3.11.6", Role: "JupyterLab"},
 		},
 		Ports: []PortMapping{
@@ -82,12 +82,12 @@ var Registry = map[string]Suite{
 	"flow": {
 		Name: "flow",
 		Containers: []Container{
-			{Name: "gradient-flow-mlflow", Image: "ghcr.io/mlflow/mlflow:2.14", Role: "Experiment tracking"},
+			{Name: "gradient-flow-mlflow", Image: "ghcr.io/mlflow/mlflow:v2.14.1", Role: "Experiment tracking"},
 			{Name: "gradient-flow-airflow", Image: "apache/airflow:2.9.0", Role: "Orchestration"},
 			{Name: "gradient-flow-prometheus", Image: "prom/prometheus:v2.51.0", Role: "Metrics"},
 			{Name: "gradient-flow-grafana", Image: "grafana/grafana:10.4.0", Role: "Dashboards"},
 			{Name: "gradient-flow-store", Image: "minio/minio:RELEASE.2024-04-06T05-26-02Z", Role: "Artifact storage"},
-			{Name: "gradient-flow-serve", Image: "bentoml/bentoml:1.2.0", Role: "Model serving"},
+			{Name: "gradient-flow-serve", Image: "bentoml/model-server:latest", Role: "Model serving"},
 		},
 		Ports: []PortMapping{
 			{Port: 5000, Service: "MLflow"},
@@ -111,16 +111,16 @@ var Registry = map[string]Suite{
 		Containers: []Container{
 			{Name: "gradient-boost-core", Image: "python:3.12-slim", Role: "Core ML stack"},
 			{Name: "gradient-boost-lab", Image: "quay.io/jupyter/base-notebook:python-3.11.6", Role: "JupyterLab"},
-			{Name: "gradient-boost-track", Image: "ghcr.io/mlflow/mlflow:2.14", Role: "MLflow tracking"},
+			{Name: "gradient-boost-track", Image: "ghcr.io/mlflow/mlflow:v2.14.1", Role: "MLflow tracking"},
 			{Name: "gradient-neural-torch", Image: "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime", Role: "Training"},
-			{Name: "gradient-neural-infer", Image: "nvidia/cuda:12.4-runtime-ubuntu24.04", Role: "Inference"},
+			{Name: "gradient-neural-infer", Image: "nvidia/cuda:12.4.1-runtime-ubuntu22.04", Role: "Inference"},
 			{Name: "gradient-neural-lab", Image: "quay.io/jupyter/base-notebook:python-3.11.6", Role: "JupyterLab"},
-			{Name: "gradient-flow-mlflow", Image: "ghcr.io/mlflow/mlflow:2.14", Role: "Experiment tracking"},
+			{Name: "gradient-flow-mlflow", Image: "ghcr.io/mlflow/mlflow:v2.14.1", Role: "Experiment tracking"},
 			{Name: "gradient-flow-airflow", Image: "apache/airflow:2.9.0", Role: "Orchestration"},
 			{Name: "gradient-flow-prometheus", Image: "prom/prometheus:v2.51.0", Role: "Metrics"},
 			{Name: "gradient-flow-grafana", Image: "grafana/grafana:10.4.0", Role: "Dashboards"},
 			{Name: "gradient-flow-store", Image: "minio/minio:RELEASE.2024-04-06T05-26-02Z", Role: "Artifact storage"},
-			{Name: "gradient-flow-serve", Image: "bentoml/bentoml:1.2.0", Role: "Model serving"},
+			{Name: "gradient-flow-serve", Image: "bentoml/model-server:latest", Role: "Model serving"},
 		},
 		Ports: []PortMapping{
 			{Port: 8888, Service: "JupyterLab"},
