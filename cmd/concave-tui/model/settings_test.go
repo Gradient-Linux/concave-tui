@@ -16,6 +16,12 @@ func TestSettingsRadioSelectionRendersAndMoves(t *testing.T) {
 	if !strings.Contains(view, "● auto") {
 		t.Fatalf("expected auto to be selected, got %q", view)
 	}
+	if !strings.Contains(view, "Balance view") {
+		t.Fatalf("expected preset label in view, got %q", view)
+	}
+	if strings.Contains(view, "GPU, suites, system") {
+		t.Fatalf("unexpected preset description text in view, got %q", view)
+	}
 
 	updated, _ := m.Update(keyRunes("l"))
 	if updated.graphStyle.Value() != "line" {

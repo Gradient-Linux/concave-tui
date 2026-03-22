@@ -302,6 +302,7 @@ func (m DashboardModel) renderWidgetCard(widget Widget, width, height int, style
 	body := widget.Render(width-4, bodyHeight, style)
 	return lipgloss.NewStyle().
 		Width(width).
+		Height(height).
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color(ColorDeep)).
 		Padding(0, 1).
@@ -355,7 +356,7 @@ func (m DashboardModel) renderGPUWidget(index, width, height int, style string) 
 	}
 
 	chartWidth := max(20, width-2)
-	chartHeight := max(8, min(height, 12))
+	chartHeight := max(8, height-2)
 	now := dashboardTickNowFn()
 	start := now.Add(-time.Duration(len(m.history[index])-1) * time.Second)
 	chart := timeserieslinechart.New(chartWidth, chartHeight)
@@ -628,34 +629,42 @@ func distributeHeight(widgets []Widget, contentHeight int) []int {
 	gaps := max(0, len(widgets)-1)
 	available := max(len(widgets)*4, contentHeight-gaps)
 	heights := make([]int, len(widgets))
-	shortIdx := make([]int, 0, len(widgets))
-	tallIdx := make([]int, 0, len(widgets))
+	fixedTotal := 0
+	expandable := make([]int, 0, len(widgets))
 
 	for idx, widget := range widgets {
-		if isTallWidget(widget.ID()) {
-			tallIdx = append(tallIdx, idx)
+		minHeight := widgetMinHeight(widget.ID())
+		heights[idx] = minHeight
+		if widgetExpandable(widget.ID()) {
+			expandable = append(expandable, idx)
 		} else {
-			shortIdx = append(shortIdx, idx)
+			fixedTotal += minHeight
 		}
 	}
 
-	if len(tallIdx) == 0 {
+	if len(expandable) == 0 {
+		return evenHeights(available, len(widgets))
+	}
+	expandableMin := 0
+	for _, idx := range expandable {
+		expandableMin += heights[idx]
+	}
+	if available < fixedTotal+expandableMin {
 		return evenHeights(available, len(widgets))
 	}
 
-	shortMin := 6
-	tallMin := 8
-	if available < len(shortIdx)*shortMin+len(tallIdx)*tallMin {
-		return evenHeights(available, len(widgets))
+	remaining := available - fixedTotal - expandableMin
+	share := 0
+	extra := 0
+	if len(expandable) > 0 {
+		share = remaining / len(expandable)
+		extra = remaining % len(expandable)
 	}
-
-	reserved := len(shortIdx) * shortMin
-	for _, idx := range shortIdx {
-		heights[idx] = shortMin
-	}
-	tallHeights := evenHeights(available-reserved, len(tallIdx))
-	for idx, widgetIdx := range tallIdx {
-		heights[widgetIdx] = max(tallMin, tallHeights[idx])
+	for idx, widgetIdx := range expandable {
+		heights[widgetIdx] += share
+		if idx < extra {
+			heights[widgetIdx]++
+		}
 	}
 	return heights
 }
@@ -679,12 +688,27 @@ func evenHeights(total, count int) []int {
 	return heights
 }
 
-func isTallWidget(id string) bool {
+func widgetExpandable(id string) bool {
 	switch id {
-	case "gpu-graph", "gpu-graph-2":
+	case "gpu-graph", "gpu-graph-2", "suite-status", "system-health", "port-map", "flow-services", "neural-containers":
 		return true
 	default:
 		return false
+	}
+}
+
+func widgetMinHeight(id string) int {
+	switch id {
+	case "gpu-graph", "gpu-graph-2":
+		return 10
+	case "suite-status", "flow-services", "neural-containers":
+		return 7
+	case "system-health", "port-map":
+		return 6
+	case "vram-bar", "ram-bar":
+		return 4
+	default:
+		return 5
 	}
 }
 

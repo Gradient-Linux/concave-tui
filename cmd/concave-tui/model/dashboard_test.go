@@ -163,16 +163,22 @@ func TestDashboardLayoutAssignsHeightsAndActivationKeepsSnapshot(t *testing.T) {
 		GPUs:     []gpu.NVIDIADevice{{Index: 0, Name: "RTX", Utilization: 42, MemoryUsedMiB: 8, MemoryTotalMiB: 16}},
 		Suites:   []dashboardSuiteState{{Name: "boosting", Installed: true, Total: 3, Running: 3}},
 	}
+	m.appendHistory(m.metrics.GPUs)
 
 	layout := m.layoutWidgets(m.widgets(), m.width, m.height, "bar")
 	if len(layout) == 0 {
 		t.Fatal("expected widget layout")
 	}
 	for _, column := range layout {
+		total := 0
 		for _, item := range column {
 			if item.height < 4 {
 				t.Fatalf("widget height = %d, want at least 4", item.height)
 			}
+			total += item.height
+		}
+		if total < m.height-(len(column)-1) {
+			t.Fatalf("column total = %d, want close to content height %d", total, m.height)
 		}
 	}
 	if cmd := m.Activate(); cmd == nil {
@@ -180,5 +186,8 @@ func TestDashboardLayoutAssignsHeightsAndActivationKeepsSnapshot(t *testing.T) {
 	}
 	if m.loading {
 		t.Fatal("expected activate to preserve existing snapshot")
+	}
+	if got := m.renderGPUWidget(0, 50, 18, "line"); !strings.Contains(got, "RTX") {
+		t.Fatalf("renderGPUWidget() = %q", got)
 	}
 }

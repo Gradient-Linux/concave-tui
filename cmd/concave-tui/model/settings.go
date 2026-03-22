@@ -371,13 +371,16 @@ func (m SettingsModel) renderNumericRow(label string, input textinput.Model, foc
 }
 
 func (m SettingsModel) presetLabel(name string) string {
-	for _, preset := range m.current.Presets {
-		if preset.Name == name {
-			if strings.TrimSpace(preset.Description) != "" {
-				return preset.Description
-			}
-			return preset.Name
-		}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "default":
+		return "Balance view"
+	case "training":
+		return "Training view"
+	case "mlops":
+		return "MLOps view"
+	case "inference":
+		return "Inference view"
+	default:
+		return strings.TrimSpace(name)
 	}
-	return name
 }
