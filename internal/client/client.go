@@ -31,10 +31,10 @@ type APIError struct {
 }
 
 type SessionResponse struct {
-	Token     string        `json:"token"`
-	Username  string        `json:"username"`
-	Role      tuiauth.Role  `json:"role"`
-	ExpiresAt time.Time     `json:"expires_at"`
+	Token     string       `json:"token"`
+	Username  string       `json:"username"`
+	Role      tuiauth.Role `json:"role"`
+	ExpiresAt time.Time    `json:"expires_at"`
 }
 
 type ContainerInfo struct {
@@ -72,10 +72,10 @@ type SuitesResponse struct {
 }
 
 type WorkspacePayload struct {
-	Root   string           `json:"root"`
-	Total  uint64           `json:"total"`
-	Free   uint64           `json:"free"`
-	Used   uint64           `json:"used"`
+	Root   string            `json:"root"`
+	Total  uint64            `json:"total"`
+	Free   uint64            `json:"free"`
+	Used   uint64            `json:"used"`
 	Usages map[string]uint64 `json:"usages"`
 }
 
@@ -126,15 +126,85 @@ type UsersActivityResponse struct {
 	Users []UserActivity `json:"users"`
 }
 
+type DriftTier int
+
+type PackageDiff struct {
+	Name     string    `json:"name"`
+	Baseline string    `json:"baseline"`
+	Current  string    `json:"current"`
+	Tier     DriftTier `json:"tier"`
+	Reason   string    `json:"reason"`
+}
+
+type DriftReport struct {
+	Group     string        `json:"group"`
+	User      string        `json:"user"`
+	Timestamp time.Time     `json:"timestamp"`
+	Diffs     []PackageDiff `json:"diffs"`
+	Clean     bool          `json:"clean"`
+}
+
+type ResolverStatus struct {
+	Available     *bool         `json:"available,omitempty"`
+	Message       string        `json:"message,omitempty"`
+	Running       bool          `json:"running,omitempty"`
+	LastScan      time.Time     `json:"last_scan,omitempty"`
+	GroupReports  []DriftReport `json:"group_reports,omitempty"`
+	SnapshotCount int           `json:"snapshot_count,omitempty"`
+	SocketPath    string        `json:"socket_path,omitempty"`
+}
+
+type FleetNode struct {
+	Hostname        string    `json:"hostname"`
+	MachineID       string    `json:"machine_id"`
+	GradientVersion string    `json:"gradient_version"`
+	Visibility      string    `json:"visibility"`
+	InstalledSuites []string  `json:"installed_suites"`
+	ResolverRunning bool      `json:"resolver_running"`
+	LastSeen        time.Time `json:"last_seen"`
+	Address         string    `json:"address"`
+}
+
+type FleetResponse struct {
+	Available *bool       `json:"available,omitempty"`
+	Message   string      `json:"message,omitempty"`
+	Count     int         `json:"count,omitempty"`
+	Peers     []FleetNode `json:"peers,omitempty"`
+}
+
+type TeamQuota struct {
+	CPUCores    float64 `json:"cpu_cores"`
+	MemoryGB    float64 `json:"memory_gb"`
+	GPUFraction float64 `json:"gpu_fraction"`
+	GPUMemoryGB float64 `json:"gpu_memory_gb"`
+	IOWeightPct int     `json:"io_weight_pct"`
+}
+
+type TeamSummary struct {
+	Name        string    `json:"name"`
+	Preset      string    `json:"preset"`
+	Users       []string  `json:"users"`
+	Quota       TeamQuota `json:"quota"`
+	GPUStrategy string    `json:"gpu_strategy"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
+type TeamsResponse struct {
+	Available *bool         `json:"available,omitempty"`
+	Message   string        `json:"message,omitempty"`
+	Teams     []TeamSummary `json:"teams,omitempty"`
+}
+
 type JobSnapshot struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Status      string                 `json:"status"`
-	Lines       []string               `json:"lines"`
-	Result      map[string]any         `json:"result,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	StartedAt   time.Time              `json:"started_at"`
-	CompletedAt time.Time              `json:"completed_at,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Status      string         `json:"status"`
+	Lines       []string       `json:"lines"`
+	Result      map[string]any `json:"result,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	StartedAt   time.Time      `json:"started_at"`
+	CompletedAt time.Time      `json:"completed_at,omitempty"`
 }
 
 type suiteActionResponse struct {
@@ -370,6 +440,54 @@ func (c *Client) UsersActivity(ctx context.Context) ([]UserActivity, error) {
 		return nil, err
 	}
 	return response.Users, nil
+}
+
+func (c *Client) ResolverStatus(ctx context.Context) (ResolverStatus, error) {
+	var response ResolverStatus
+	req, err := c.newJSONRequest(ctx, http.MethodGet, "/api/v1/env/status", nil)
+	if err != nil {
+		return ResolverStatus{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return ResolverStatus{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) FleetStatus(ctx context.Context) (FleetResponse, error) {
+	var response FleetResponse
+	req, err := c.newJSONRequest(ctx, http.MethodGet, "/api/v1/fleet/status", nil)
+	if err != nil {
+		return FleetResponse{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return FleetResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) NodeStatus(ctx context.Context) (FleetNode, error) {
+	var response FleetNode
+	req, err := c.newJSONRequest(ctx, http.MethodGet, "/api/v1/node/status", nil)
+	if err != nil {
+		return FleetNode{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return FleetNode{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) Teams(ctx context.Context) (TeamsResponse, error) {
+	var response TeamsResponse
+	req, err := c.newJSONRequest(ctx, http.MethodGet, "/api/v1/teams", nil)
+	if err != nil {
+		return TeamsResponse{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return TeamsResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Client) SystemAction(ctx context.Context, action string) error {

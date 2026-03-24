@@ -27,6 +27,10 @@ func restoreModelDeps(t *testing.T) {
 	oldAPIWorkspaceBackup := apiWorkspaceBackupFn
 	oldAPIWorkspaceClean := apiWorkspaceCleanFn
 	oldAPIDoctor := apiDoctorFn
+	oldAPIResolverStatus := apiResolverStatusFn
+	oldAPINodeStatus := apiNodeStatusFn
+	oldAPIFleetStatus := apiFleetStatusFn
+	oldAPITeams := apiTeamsFn
 	oldAPISystemInfo := apiSystemInfoFn
 	oldAPIUsersActivity := apiUsersActivityFn
 	oldAPISystemAction := apiSystemActionFn
@@ -51,6 +55,10 @@ func restoreModelDeps(t *testing.T) {
 		apiWorkspaceBackupFn = oldAPIWorkspaceBackup
 		apiWorkspaceCleanFn = oldAPIWorkspaceClean
 		apiDoctorFn = oldAPIDoctor
+		apiResolverStatusFn = oldAPIResolverStatus
+		apiNodeStatusFn = oldAPINodeStatus
+		apiFleetStatusFn = oldAPIFleetStatus
+		apiTeamsFn = oldAPITeams
 		apiSystemInfoFn = oldAPISystemInfo
 		apiUsersActivityFn = oldAPIUsersActivity
 		apiSystemActionFn = oldAPISystemAction
@@ -99,7 +107,7 @@ func TestRootSwitchesViewsWhenAuthenticated(t *testing.T) {
 		t.Fatalf("activeView = %v, want %v", root.activeView, ViewSuites)
 	}
 
-	updated, _ = root.Update(keyRunes("5"))
+	updated, _ = root.Update(keyRunes("8"))
 	root = updated.(*RootModel)
 	if root.activeView != ViewSystem {
 		t.Fatalf("activeView = %v, want %v", root.activeView, ViewSystem)
@@ -167,7 +175,15 @@ func TestHelpOverlayShowsRoleFilteredActions(t *testing.T) {
 func TestAdminVisibleViewsIncludeSystemAndUsers(t *testing.T) {
 	m := NewRootModel("dev", testConfig(), authSession(tuiauth.RoleAdmin))
 	views := m.visibleViews()
-	if len(views) != 6 || views[4] != ViewSystem || views[5] != ViewUsers {
+	if len(views) != 9 || views[4] != ViewEnvironment || views[5] != ViewFleet || views[6] != ViewTeams || views[7] != ViewSystem || views[8] != ViewUsers {
+		t.Fatalf("visibleViews() = %#v", views)
+	}
+}
+
+func TestViewerVisibleViewsIncludeMonitoringScreens(t *testing.T) {
+	m := NewRootModel("dev", testConfig(), authSession(tuiauth.RoleViewer))
+	views := m.visibleViews()
+	if len(views) != 6 || views[4] != ViewEnvironment || views[5] != ViewFleet {
 		t.Fatalf("visibleViews() = %#v", views)
 	}
 }

@@ -48,6 +48,18 @@ var (
 	apiUsersActivityFn = func(ctx context.Context) ([]apiclient.UserActivity, error) {
 		return sharedClient.UsersActivity(ctx)
 	}
+	apiResolverStatusFn = func(ctx context.Context) (apiclient.ResolverStatus, error) {
+		return sharedClient.ResolverStatus(ctx)
+	}
+	apiNodeStatusFn = func(ctx context.Context) (apiclient.FleetNode, error) {
+		return sharedClient.NodeStatus(ctx)
+	}
+	apiFleetStatusFn = func(ctx context.Context) (apiclient.FleetResponse, error) {
+		return sharedClient.FleetStatus(ctx)
+	}
+	apiTeamsFn = func(ctx context.Context) (apiclient.TeamsResponse, error) {
+		return sharedClient.Teams(ctx)
+	}
 	apiSystemActionFn = func(ctx context.Context, action string) error {
 		return sharedClient.SystemAction(ctx, action)
 	}

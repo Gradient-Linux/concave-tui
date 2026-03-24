@@ -99,6 +99,9 @@ const (
 	ViewSuites
 	ViewLogs
 	ViewDoctor
+	ViewEnvironment
+	ViewFleet
+	ViewTeams
 	ViewSystem
 	ViewUsers
 )
@@ -122,6 +125,9 @@ type RootModel struct {
 	logs         LogsModel
 	workspace    WorkspaceModel
 	doctor       DoctorModel
+	environment  EnvironmentModel
+	fleet        FleetModel
+	teams        TeamsModel
 	system       SystemModel
 	users        UsersModel
 	settings     SettingsModel
@@ -167,19 +173,22 @@ func NewRootModel(version string, cfgs ...any) *RootModel {
 		}
 	}
 	m := &RootModel{
-		activeView: ViewWorkspace,
-		sidebar:    sidebarStateFromConfig(cfg),
-		login:      NewLoginModel(),
-		suites:     NewSuitesModel(),
-		logs:       NewLogsModel(),
-		workspace:  NewWorkspaceModel(),
-		doctor:     NewDoctorModel(),
-		system:     NewSystemModel(),
-		users:      NewUsersModel(),
-		settings:   NewSettingsModel(cfg),
-		version:    version,
-		cfg:        cfg,
-		session:    session,
+		activeView:  ViewWorkspace,
+		sidebar:     sidebarStateFromConfig(cfg),
+		login:       NewLoginModel(),
+		suites:      NewSuitesModel(),
+		logs:        NewLogsModel(),
+		workspace:   NewWorkspaceModel(),
+		doctor:      NewDoctorModel(),
+		environment: NewEnvironmentModel(),
+		fleet:       NewFleetModel(),
+		teams:       NewTeamsModel(),
+		system:      NewSystemModel(),
+		users:       NewUsersModel(),
+		settings:    NewSettingsModel(cfg),
+		version:     version,
+		cfg:         cfg,
+		session:     session,
 	}
 	m.applyConfig(cfg)
 	m.applySession(session)
@@ -254,6 +263,12 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs, cmd = m.logs.Update(msg)
 	case ViewDoctor:
 		m.doctor, cmd = m.doctor.Update(msg)
+	case ViewEnvironment:
+		m.environment, cmd = m.environment.Update(msg)
+	case ViewFleet:
+		m.fleet, cmd = m.fleet.Update(msg)
+	case ViewTeams:
+		m.teams, cmd = m.teams.Update(msg)
 	case ViewSystem:
 		m.system, cmd = m.system.Update(msg)
 	case ViewUsers:
@@ -289,6 +304,9 @@ func (m *RootModel) applySession(session tuiauth.Session) {
 	m.suites.SetRole(session.Role)
 	m.workspace.SetRole(session.Role)
 	m.doctor.SetRole(session.Role)
+	m.environment.SetRole(session.Role)
+	m.fleet.SetRole(session.Role)
+	m.teams.SetRole(session.Role)
 	m.system.SetRole(session.Role)
 	m.users.SetRole(session.Role)
 }
@@ -315,21 +333,9 @@ func (m *RootModel) handleGlobalKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.workspace.SetConfig(m.settings.Current())
 		m.applyLayout()
 		return true, nil
-	case "1":
-		return true, m.switchView(ViewWorkspace)
-	case "2":
-		return true, m.switchView(ViewSuites)
-	case "3":
-		return true, m.switchView(ViewLogs)
-	case "4":
-		return true, m.switchView(ViewDoctor)
-	case "5":
-		if m.session.Role >= tuiauth.RoleAdmin {
-			return true, m.switchView(ViewSystem)
-		}
-	case "6":
-		if m.session.Role >= tuiauth.RoleAdmin {
-			return true, m.switchView(ViewUsers)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		if view, ok := m.viewForDigit(msg.String()); ok {
+			return true, m.switchView(view)
 		}
 	case "tab":
 		return true, m.switchView(m.nextVisibleView(m.activeView, 1))
@@ -424,6 +430,12 @@ func (m *RootModel) deactivateView(view View) {
 		m.logs.Deactivate()
 	case ViewDoctor:
 		m.doctor.Deactivate()
+	case ViewEnvironment:
+		m.environment.Deactivate()
+	case ViewFleet:
+		m.fleet.Deactivate()
+	case ViewTeams:
+		m.teams.Deactivate()
 	case ViewSystem:
 		m.system.Deactivate()
 	case ViewUsers:
@@ -441,6 +453,12 @@ func (m *RootModel) activateView(view View) tea.Cmd {
 		return m.logs.Activate()
 	case ViewDoctor:
 		return m.doctor.Activate()
+	case ViewEnvironment:
+		return m.environment.Activate()
+	case ViewFleet:
+		return m.fleet.Activate()
+	case ViewTeams:
+		return m.teams.Activate()
 	case ViewSystem:
 		return m.system.Activate()
 	case ViewUsers:
@@ -464,6 +482,9 @@ func (m *RootModel) applyLayout() {
 	m.logs.SetSize(contentWidth, contentHeight)
 	m.workspace.SetSize(contentWidth, contentHeight)
 	m.doctor.SetSize(contentWidth, contentHeight)
+	m.environment.SetSize(contentWidth, contentHeight)
+	m.fleet.SetSize(contentWidth, contentHeight)
+	m.teams.SetSize(contentWidth, contentHeight)
 	m.system.SetSize(contentWidth, contentHeight)
 	m.users.SetSize(contentWidth, contentHeight)
 	m.login.SetSize(max(minWidth, m.width), max(24, m.height))
@@ -513,7 +534,7 @@ func (m *RootModel) contentView() string {
 }
 
 func (m *RootModel) sidebarView() string {
-	lines := make([]string, 0, 7)
+	lines := make([]string, 0, 9)
 	for _, view := range m.visibleViews() {
 		active := view == m.activeView
 		icon := sidebarIcon(view)
@@ -547,6 +568,12 @@ func (m *RootModel) activeContent() string {
 		return m.logs.View()
 	case ViewDoctor:
 		return m.doctor.View()
+	case ViewEnvironment:
+		return m.environment.View()
+	case ViewFleet:
+		return m.fleet.View()
+	case ViewTeams:
+		return m.teams.View()
 	case ViewSystem:
 		return m.system.View()
 	case ViewUsers:
@@ -576,10 +603,11 @@ func (m *RootModel) activeHelp() string {
 		"G              jump to bottom",
 		"ctrl+d / u     scroll half page",
 		"ctrl+f / b     scroll full page",
-		"1-6            switch view",
+		m.viewShortcutSummary(),
 		"",
 		lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Actions (" + sidebarLabel(m.activeView) + " view)"),
 	}
+	lines = append(lines, m.viewShortcutLines()...)
 	lines = append(lines, m.activeHelpActions()...)
 	lines = append(lines,
 		"",
@@ -641,6 +669,22 @@ func (m *RootModel) activeHelpActions() []string {
 		return []string{
 			"r              rerun checks",
 		}
+	case ViewEnvironment:
+		return []string{
+			"r              refresh environment",
+			"j / k          move report selection",
+		}
+	case ViewFleet:
+		return []string{
+			"r              refresh fleet",
+			"j / k          move peer selection",
+		}
+	case ViewTeams:
+		return []string{
+			"r              refresh teams",
+			"j / k          move team selection",
+			"enter          expand team members",
+		}
 	case ViewSystem:
 		return []string{
 			"r              reboot",
@@ -670,7 +714,7 @@ func (m *RootModel) headerView() string {
 func (m *RootModel) footerView() string {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ColorMuted)).
-		Render(fmt.Sprintf("%s │ tab next · shift+tab prev · b sidebar · , settings · F1 help · q quit", m.currentMode()))
+		Render(fmt.Sprintf("%s │ tab next · shift+tab prev · %s · b sidebar · , settings · F1 help · q quit", m.currentMode(), m.viewShortcutSummary()))
 }
 
 func (m *RootModel) currentMode() string {
@@ -785,9 +829,9 @@ func sidebarStateFromConfig(cfg tuiconfig.Config) SidebarState {
 }
 
 func (m RootModel) visibleViews() []View {
-	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor}
+	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor, ViewEnvironment, ViewFleet}
 	if m.session.Role >= tuiauth.RoleAdmin {
-		views = append(views, ViewSystem, ViewUsers)
+		views = append(views, ViewTeams, ViewSystem, ViewUsers)
 	}
 	return views
 }
@@ -828,17 +872,23 @@ func (m RootModel) nextVisibleView(current View, delta int) View {
 func sidebarIcon(view View) string {
 	switch view {
 	case ViewWorkspace:
-		return "󰉋"
+		return "WS"
 	case ViewSuites:
-		return "󰣘"
+		return "SU"
 	case ViewLogs:
-		return "󰈙"
+		return "LG"
 	case ViewDoctor:
-		return "󰓙"
+		return "CK"
+	case ViewEnvironment:
+		return "EN"
+	case ViewFleet:
+		return "FL"
+	case ViewTeams:
+		return "TM"
 	case ViewSystem:
-		return "󰑓"
+		return "SY"
 	case ViewUsers:
-		return "󰀄"
+		return "US"
 	default:
 		return "•"
 	}
@@ -854,6 +904,12 @@ func sidebarLabel(view View) string {
 		return "Logs"
 	case ViewDoctor:
 		return "Doctor"
+	case ViewEnvironment:
+		return "Environment"
+	case ViewFleet:
+		return "Fleet"
+	case ViewTeams:
+		return "Teams"
 	case ViewSystem:
 		return "System"
 	case ViewUsers:
@@ -861,6 +917,31 @@ func sidebarLabel(view View) string {
 	default:
 		return ""
 	}
+}
+
+func (m RootModel) viewShortcutSummary() string {
+	return fmt.Sprintf("1-%d views", len(m.visibleViews()))
+}
+
+func (m RootModel) viewShortcutLines() []string {
+	lines := []string{lipgloss.NewStyle().Foreground(lipgloss.Color(ColorGold)).Bold(true).Render("Views")}
+	for idx, view := range m.visibleViews() {
+		lines = append(lines, fmt.Sprintf("%d              %s", idx+1, sidebarLabel(view)))
+	}
+	lines = append(lines, "")
+	return lines
+}
+
+func (m RootModel) viewForDigit(digit string) (View, bool) {
+	if len(digit) != 1 || digit[0] < '1' || digit[0] > '9' {
+		return 0, false
+	}
+	index := int(digit[0] - '1')
+	views := m.visibleViews()
+	if index < 0 || index >= len(views) {
+		return 0, false
+	}
+	return views[index], true
 }
 
 func gradientText(text string) string {
