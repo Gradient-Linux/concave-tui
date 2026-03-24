@@ -1,48 +1,85 @@
 # Contributing to concave-tui
 
-`concave-tui` is the terminal frontend for Gradient Linux operations.
+Contributions are welcome for terminal UX, API-backed workflows, session handling, tests, and documentation. Keep the repository focused on presentation and operator ergonomics. Backend business logic belongs in `concave`.
 
-## Scope
+## Before you start
 
-- Repository: `github.com/Gradient-Linux/concave-tui`
-- Go module: `github.com/Gradient-Linux/concave-tui`
-- Target platform: Ubuntu 24.04 LTS
-- Primary deliverable: a static `concave-tui` binary
+Read [README.md](README.md), [docs/getting-started.md](docs/getting-started.md), and [docs/keybindings.md](docs/keybindings.md) before changing view behavior or the session flow.
 
-## Local Checks
+## Development setup
 
-Run these before opening a pull request:
+Use Ubuntu 24.04 with Go 1.25 or newer.
 
 ```bash
+git clone <repo-url>
+cd concave-tui
+go build -o concave-tui ./cmd/concave-tui/
 go test ./...
-go vet ./...
-CGO_ENABLED=0 go build -o concave-tui ./cmd/concave-tui/
+go test -race ./...
+./concave-tui --help
 ```
 
-## Dependency Policy
+For end-to-end testing, run `concave serve` locally and then launch `./concave-tui`.
 
-Direct dependencies stay intentionally small.
+## Making changes
 
-Approved direct dependencies:
+### Branching
 
-- `github.com/charmbracelet/bubbletea`
-- `github.com/charmbracelet/lipgloss`
-- `github.com/charmbracelet/bubbles`
-- `github.com/gorilla/websocket`
+Use one of these branch prefixes:
 
-New direct dependencies require maintainer approval.
+- `feat/<slug>`
+- `fix/<slug>`
+- `docs/<slug>`
 
-## Project Boundaries
+### Commit messages
 
-- `concave-tui` owns the terminal UI layer
-- `concave` owns auth, role resolution, and machine control
-- `concave-tui` consumes `concave serve`; it does not duplicate backend authority
-- Do not move Bubble Tea or UI rendering code back into the `concave` repository
+Format commits as `<type>(<scope>): <summary>`.
 
-## Pull Requests
+Use these types:
 
-Use small, coherent changes and update docs in the same pull request when behavior
-changes.
+- `feat`
+- `fix`
+- `refactor`
+- `test`
+- `docs`
+- `chore`
 
-Documentation for this repo lives in [docs](docs). Keep [README.md](README.md) and
-the relevant files under `docs/` aligned with runtime or UX changes.
+Keep the summary under 72 characters.
+
+Examples:
+
+- `feat(suites): add live restart progress panel`
+- `fix(login): handle expired cached sessions`
+- `docs(keybindings): document fleet view shortcuts`
+
+### Tests
+
+- Add or update tests for every new function and behavior change.
+- Run `go test ./...` before opening a pull request.
+- Run `go test -race ./...` when you touch state mutation, timers, or async updates.
+- Keep tests local. Unit tests must not require a live terminal, Docker daemon, or networked API unless the test is explicitly integration-scoped.
+
+### Pull requests
+
+- Keep pull requests to one logical change.
+- Explain what changed in the UI and which API routes or WebSocket flows it depends on.
+- Include screenshots or terminal captures for visible UI changes.
+
+## Code conventions
+
+- Keep business logic in `concave`. `concave-tui` is an API client and presentation layer.
+- Use Bubble Tea for the event loop and Lip Gloss for styling.
+- Keep the color palette aligned with the Gradient Linux terminal look.
+- Reuse the authenticated API and returned role metadata instead of re-deriving machine state ad hoc.
+- Preserve session caching at `~/.config/concave/session.json`.
+
+## What we don't accept
+
+- Dependencies added without prior discussion in an issue.
+- Duplicated suite, auth, or permission rules that should stay in `concave`.
+- Shell string interpolation with user-controlled input.
+- UI changes that bypass `concave serve` for privileged actions.
+
+## License
+
+By contributing, you agree that your contributions will be released under the repository license when one is published.

@@ -1,92 +1,84 @@
 # concave-tui
 
-`concave-tui` is the terminal frontend for Gradient Linux. It provides a dedicated
-Bubble Tea interface for suite operations, workspace inspection, logs, health, and
-admin views while treating `concave serve` as the backend authority.
+Terminal control surface for Gradient Linux, backed by the local `concave` API.
 
-## Responsibilities
+## What it does
 
-This repository owns:
+`concave-tui` provides a full-screen Bubble Tea interface for suite lifecycle, live logs, workspace health, environment drift, fleet visibility, and admin views. It is a client of `concave serve` on `127.0.0.1:7777`. It does not embed `concave` as a library and it does not own machine authority.
 
-- the `concave-tui` terminal application
-- login and cached-session bootstrap against `concave serve`
-- role-aware terminal views and keybindings
-- terminal-first rendering for workspace, suites, logs, doctor, system, and users pages
+## Requirements
 
-This repository does not own:
+- Ubuntu 24.04 LTS
+- `concave serve` running on `127.0.0.1:7777`
+- ANSI-capable terminal
 
-- PAM auth
-- Unix group resolution
-- privileged backend operations
-- browser-facing UI
+## Install
 
-Those live in `concave` and `concave-web`.
+`concave-tui` ships with the Gradient Linux distribution and can also be installed from release artifacts when they are published. For source builds:
 
-## Runtime expectations
+```bash
+go build -o concave-tui ./cmd/concave-tui/
+```
 
-`concave-tui` expects:
+## Usage
 
-- a reachable `concave serve` instance
-- a valid cached session or valid host credentials for login
-- ANSI-capable terminal output
+Launch the TUI against the local `concave` API:
 
-Important paths:
+```bash
+concave-tui
+```
 
-- session cache: `~/.config/concave/session.json`
-- TUI config: `~/.config/concave-tui/config.toml`
+Common keys after login:
 
-## Views
+| Key | Action |
+|---|---|
+| `1`-`9` | Jump to a visible view |
+| `tab` / `shift+tab` | Move to the next or previous view |
+| `?` or `F1` | Open the help overlay |
+| `,` | Open settings |
+| `q` | Quit |
 
-The TUI currently exposes:
+## Configuration
 
-- Workspace
-- Suites
-- Logs
-- Doctor
-- System
-- Users
+`concave-tui` reads user display settings from `~/.config/concave-tui/config.toml` and writes workspace-backed presets to `~/gradient/config/concave-tui.toml`. Session tokens are cached in `~/.config/concave/session.json`.
 
-Role-aware behavior:
+## Architecture
 
-- viewer: read-only operational views
-- developer: interactive lab/shell/exec-style suite access where allowed
-- operator: suite lifecycle and workspace mutation
-- admin: System and Users views plus machine-level actions
+`concave-tui` is a presentation layer. It authenticates against `concave serve`, renders the returned data in a terminal UI, and opens terminals or suite actions through the same local API. Local helpers are limited to terminal-focused metrics and cached preferences.
 
-## Build
+## Development
+
+### Prerequisites
+
+Install Go 1.25 or newer and run a local `concave serve` instance if you want to test the live UI.
+
+### Build
+
+```bash
+go build -o concave-tui ./cmd/concave-tui/
+```
+
+### Test
 
 ```bash
 go test ./...
 go test -race ./...
-go vet ./...
-CGO_ENABLED=0 go build -o concave-tui ./cmd/concave-tui/
 ```
 
-## Run
+### Repo layout
 
-```bash
-./concave-tui --help
-./concave-tui
+```text
+concave-tui/
+  cmd/concave-tui/   Bubble Tea entrypoint, models, config
+  internal/client/   HTTP and WebSocket client for concave serve
+  internal/auth/     session model and role helpers
+  docs/              user and contributor docs
 ```
 
-If a valid cached session exists, startup skips the login prompt. Otherwise the TUI
-authenticates against `concave serve` and writes a new local session file.
+## Roadmap
 
-## Documentation
+The current line covers suite control, logs, workspace monitoring, resolver and fleet status, and admin-only system and user views. Upcoming work focuses on deeper command parity with the web client and richer multi-node operations.
 
-Start with [docs/README.md](docs/README.md).
+## License
 
-Important docs:
-
-- [docs/architecture.md](docs/architecture.md)
-- [docs/views.md](docs/views.md)
-- [docs/runtime.md](docs/runtime.md)
-
-## Relationship to the stack
-
-- `concave`: infrastructure CLI and authenticated control plane
-- `concave-web`: browser control plane
-- `concave-tui`: terminal control plane client
-
-The split keeps Bubble Tea and terminal UX dependencies out of the infrastructure
-binary.
+License terms have not been published in this repository yet.

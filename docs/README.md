@@ -1,17 +1,9 @@
 # concave-tui docs
 
-This directory contains the repository-level documentation for `concave-tui`.
+## Start here
 
-## Reading order
-
-- [architecture.md](architecture.md): application structure, server-backed client
-  model, role-aware UI boundaries, and repository layout.
-- [views.md](views.md): view-by-view behavior, role exposure, and action mapping.
-- [runtime.md](runtime.md): config paths, session handling, startup flow, and
-  troubleshooting.
-
-## Relationship to the rest of the stack
-
-- `concave` owns the backend control plane and privileged behavior.
-- `concave-web` owns the browser frontend.
-- `concave-tui` owns the terminal UI client.
+- [getting-started.md](getting-started.md) covers login, session caching, and first launch.
+- [keybindings.md](keybindings.md) lists global and per-view shortcuts.
+- [architecture.md](architecture.md) explains the client boundary.
+- [runtime.md](runtime.md) covers config files and startup behavior.
+- [views.md](views.md) describes the current view set.
