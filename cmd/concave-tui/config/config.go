@@ -20,8 +20,14 @@ type DisplayConfig struct {
 	RefreshIntervalMs        int    `toml:"refresh_interval_ms"`
 }
 
+type MonitoringConfig struct {
+	PrometheusURL string `toml:"prometheus_url"`
+	GrafanaURL    string `toml:"grafana_url"`
+}
+
 type Config struct {
 	Display      DisplayConfig
+	Monitoring   MonitoringConfig
 	ActivePreset string
 	Presets      []Preset
 }
@@ -56,6 +62,10 @@ func DefaultConfig() Config {
 			GraphAutoHeightThreshold: 40,
 			SidebarDefault:           "expanded",
 			RefreshIntervalMs:        1000,
+		},
+		Monitoring: MonitoringConfig{
+			PrometheusURL: "",
+			GrafanaURL:    "",
 		},
 		ActivePreset: "default",
 		Presets: []Preset{
@@ -195,6 +205,9 @@ func marshalXDG(c Config) []byte {
 	fmt.Fprintf(&buf, "graph_auto_height_threshold = %d\n", max(1, c.Display.GraphAutoHeightThreshold))
 	fmt.Fprintf(&buf, "sidebar_default = %q\n", normalizedSidebar(c.Display.SidebarDefault))
 	fmt.Fprintf(&buf, "refresh_interval_ms = %d\n", max(100, c.Display.RefreshIntervalMs))
+	buf.WriteString("\n[monitoring]\n")
+	fmt.Fprintf(&buf, "prometheus_url = %q\n", c.Monitoring.PrometheusURL)
+	fmt.Fprintf(&buf, "grafana_url = %q\n", c.Monitoring.GrafanaURL)
 	buf.WriteString("\n[layout]\n")
 	fmt.Fprintf(&buf, "active_preset = %q\n", activePresetName(c))
 	return buf.Bytes()
@@ -232,6 +245,9 @@ func parseXDGInto(cfg *Config, data []byte) {
 		case "[display]":
 			section = "display"
 			continue
+		case "[monitoring]":
+			section = "monitoring"
+			continue
 		case "[layout]":
 			section = "layout"
 			continue
@@ -253,6 +269,13 @@ func parseXDGInto(cfg *Config, data []byte) {
 				cfg.Display.SidebarDefault = parseString(value, cfg.Display.SidebarDefault)
 			case "refresh_interval_ms":
 				cfg.Display.RefreshIntervalMs = parseInt(value, cfg.Display.RefreshIntervalMs)
+			}
+		case "monitoring":
+			switch key {
+			case "prometheus_url":
+				cfg.Monitoring.PrometheusURL = parseString(value, cfg.Monitoring.PrometheusURL)
+			case "grafana_url":
+				cfg.Monitoring.GrafanaURL = parseString(value, cfg.Monitoring.GrafanaURL)
 			}
 		case "layout":
 			if key == "active_preset" {

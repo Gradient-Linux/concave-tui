@@ -101,6 +101,7 @@ const (
 	ViewDoctor
 	ViewEnvironment
 	ViewFleet
+	ViewMonitoring
 	ViewTeams
 	ViewSystem
 	ViewUsers
@@ -127,6 +128,7 @@ type RootModel struct {
 	doctor       DoctorModel
 	environment  EnvironmentModel
 	fleet        FleetModel
+	monitoring   MonitoringModel
 	teams        TeamsModel
 	system       SystemModel
 	users        UsersModel
@@ -182,6 +184,7 @@ func NewRootModel(version string, cfgs ...any) *RootModel {
 		doctor:      NewDoctorModel(),
 		environment: NewEnvironmentModel(),
 		fleet:       NewFleetModel(),
+		monitoring:  NewMonitoringModel(),
 		teams:       NewTeamsModel(),
 		system:      NewSystemModel(),
 		users:       NewUsersModel(),
@@ -225,6 +228,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showSettings = false
 		m.settings.SetConfig(m.cfg)
 		m.workspace.SetConfig(m.cfg)
+		m.monitoring.SetConfig(m.cfg.Monitoring.PrometheusURL, m.cfg.Monitoring.GrafanaURL)
 		m.applyLayout()
 		return m, saveTUIConfigCmd(m.cfg)
 	case settingsDiscardedMsg:
@@ -267,6 +271,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.environment, cmd = m.environment.Update(msg)
 	case ViewFleet:
 		m.fleet, cmd = m.fleet.Update(msg)
+	case ViewMonitoring:
+		m.monitoring, cmd = m.monitoring.Update(msg)
 	case ViewTeams:
 		m.teams, cmd = m.teams.Update(msg)
 	case ViewSystem:
@@ -306,6 +312,7 @@ func (m *RootModel) applySession(session tuiauth.Session) {
 	m.doctor.SetRole(session.Role)
 	m.environment.SetRole(session.Role)
 	m.fleet.SetRole(session.Role)
+	m.monitoring.SetRole(session.Role)
 	m.teams.SetRole(session.Role)
 	m.system.SetRole(session.Role)
 	m.users.SetRole(session.Role)
@@ -434,6 +441,8 @@ func (m *RootModel) deactivateView(view View) {
 		m.environment.Deactivate()
 	case ViewFleet:
 		m.fleet.Deactivate()
+	case ViewMonitoring:
+		m.monitoring.Deactivate()
 	case ViewTeams:
 		m.teams.Deactivate()
 	case ViewSystem:
@@ -457,6 +466,8 @@ func (m *RootModel) activateView(view View) tea.Cmd {
 		return m.environment.Activate()
 	case ViewFleet:
 		return m.fleet.Activate()
+	case ViewMonitoring:
+		return m.monitoring.Activate()
 	case ViewTeams:
 		return m.teams.Activate()
 	case ViewSystem:
@@ -473,6 +484,7 @@ func (m *RootModel) applyConfig(cfg tuiconfig.Config) {
 	m.sidebar = sidebarStateFromConfig(cfg)
 	m.settings.SetConfig(cfg)
 	m.workspace.SetConfig(cfg)
+	m.monitoring.SetConfig(cfg.Monitoring.PrometheusURL, cfg.Monitoring.GrafanaURL)
 }
 
 func (m *RootModel) applyLayout() {
@@ -484,6 +496,7 @@ func (m *RootModel) applyLayout() {
 	m.doctor.SetSize(contentWidth, contentHeight)
 	m.environment.SetSize(contentWidth, contentHeight)
 	m.fleet.SetSize(contentWidth, contentHeight)
+	m.monitoring.SetSize(contentWidth, contentHeight)
 	m.teams.SetSize(contentWidth, contentHeight)
 	m.system.SetSize(contentWidth, contentHeight)
 	m.users.SetSize(contentWidth, contentHeight)
@@ -572,6 +585,8 @@ func (m *RootModel) activeContent() string {
 		return m.environment.View()
 	case ViewFleet:
 		return m.fleet.View()
+	case ViewMonitoring:
+		return m.monitoring.View()
 	case ViewTeams:
 		return m.teams.View()
 	case ViewSystem:
@@ -678,6 +693,10 @@ func (m *RootModel) activeHelpActions() []string {
 		return []string{
 			"r              refresh fleet",
 			"j / k          move peer selection",
+		}
+	case ViewMonitoring:
+		return []string{
+			"r              refresh monitoring",
 		}
 	case ViewTeams:
 		return []string{
@@ -829,7 +848,7 @@ func sidebarStateFromConfig(cfg tuiconfig.Config) SidebarState {
 }
 
 func (m RootModel) visibleViews() []View {
-	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor, ViewEnvironment, ViewFleet}
+	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor, ViewEnvironment, ViewFleet, ViewMonitoring}
 	if m.session.Role >= tuiauth.RoleAdmin {
 		views = append(views, ViewTeams, ViewSystem, ViewUsers)
 	}
@@ -883,6 +902,8 @@ func sidebarIcon(view View) string {
 		return "EN"
 	case ViewFleet:
 		return "FL"
+	case ViewMonitoring:
+		return "MN"
 	case ViewTeams:
 		return "TM"
 	case ViewSystem:
@@ -908,6 +929,8 @@ func sidebarLabel(view View) string {
 		return "Environment"
 	case ViewFleet:
 		return "Fleet"
+	case ViewMonitoring:
+		return "Monitoring"
 	case ViewTeams:
 		return "Teams"
 	case ViewSystem:

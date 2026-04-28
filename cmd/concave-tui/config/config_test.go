@@ -132,6 +132,31 @@ func TestSaveWritesAtomically(t *testing.T) {
 	}
 }
 
+func TestMonitoringURLsRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(home, ".config")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	cfg := DefaultConfig()
+	cfg.Monitoring.PrometheusURL = "http://127.0.0.1:9090"
+	cfg.Monitoring.GrafanaURL = "http://grafana.internal"
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Monitoring.PrometheusURL != cfg.Monitoring.PrometheusURL {
+		t.Fatalf("PrometheusURL = %q", loaded.Monitoring.PrometheusURL)
+	}
+	if loaded.Monitoring.GrafanaURL != cfg.Monitoring.GrafanaURL {
+		t.Fatalf("GrafanaURL = %q", loaded.Monitoring.GrafanaURL)
+	}
+}
+
 func TestResolveGraphStyleBoundaries(t *testing.T) {
 	cfg := DefaultConfig()
 	if got := ResolveGraphStyle(cfg, 119, 40); got != "bar" {

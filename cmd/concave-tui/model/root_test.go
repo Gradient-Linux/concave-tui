@@ -39,6 +39,7 @@ func restoreModelDeps(t *testing.T) {
 	oldAPILabURL := apiLabURLFn
 	oldAPIChangelog := apiChangelogFn
 	oldAPILogsDial := apiLogsDialFn
+	oldNewMonitoringProber := newMonitoringProberFn
 
 	t.Cleanup(func() {
 		saveTUIConfigFn = oldSaveTUIConfig
@@ -67,6 +68,7 @@ func restoreModelDeps(t *testing.T) {
 		apiLabURLFn = oldAPILabURL
 		apiChangelogFn = oldAPIChangelog
 		apiLogsDialFn = oldAPILogsDial
+		newMonitoringProberFn = oldNewMonitoringProber
 	})
 }
 
@@ -107,7 +109,7 @@ func TestRootSwitchesViewsWhenAuthenticated(t *testing.T) {
 		t.Fatalf("activeView = %v, want %v", root.activeView, ViewSuites)
 	}
 
-	updated, _ = root.Update(keyRunes("8"))
+	updated, _ = root.Update(keyRunes("9"))
 	root = updated.(*RootModel)
 	if root.activeView != ViewSystem {
 		t.Fatalf("activeView = %v, want %v", root.activeView, ViewSystem)
@@ -175,7 +177,7 @@ func TestHelpOverlayShowsRoleFilteredActions(t *testing.T) {
 func TestAdminVisibleViewsIncludeSystemAndUsers(t *testing.T) {
 	m := NewRootModel("dev", testConfig(), authSession(tuiauth.RoleAdmin))
 	views := m.visibleViews()
-	if len(views) != 9 || views[4] != ViewEnvironment || views[5] != ViewFleet || views[6] != ViewTeams || views[7] != ViewSystem || views[8] != ViewUsers {
+	if len(views) != 10 || views[4] != ViewEnvironment || views[5] != ViewFleet || views[6] != ViewMonitoring || views[7] != ViewTeams || views[8] != ViewSystem || views[9] != ViewUsers {
 		t.Fatalf("visibleViews() = %#v", views)
 	}
 }
@@ -183,7 +185,7 @@ func TestAdminVisibleViewsIncludeSystemAndUsers(t *testing.T) {
 func TestViewerVisibleViewsIncludeMonitoringScreens(t *testing.T) {
 	m := NewRootModel("dev", testConfig(), authSession(tuiauth.RoleViewer))
 	views := m.visibleViews()
-	if len(views) != 6 || views[4] != ViewEnvironment || views[5] != ViewFleet {
+	if len(views) != 7 || views[4] != ViewEnvironment || views[5] != ViewFleet || views[6] != ViewMonitoring {
 		t.Fatalf("visibleViews() = %#v", views)
 	}
 }
