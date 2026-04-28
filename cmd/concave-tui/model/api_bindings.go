@@ -75,6 +75,18 @@ var (
 	apiChangelogFn = func(ctx context.Context, name string) (apiclient.ChangelogResponse, error) {
 		return sharedClient.Changelog(ctx, name)
 	}
+	apiLabEnvsFn = func(ctx context.Context) (apiclient.LabEnvsResponse, error) {
+		return sharedClient.LabEnvs(ctx)
+	}
+	apiLabLaunchFn = func(ctx context.Context, payload apiclient.LabLaunchRequest) (apiclient.LabEnv, error) {
+		return sharedClient.LabLaunch(ctx, payload)
+	}
+	apiLabExtendFn = func(ctx context.Context, id string, extendSeconds int) (apiclient.LabEnv, error) {
+		return sharedClient.LabExtend(ctx, id, extendSeconds)
+	}
+	apiLabArchiveFn = func(ctx context.Context, id string) (apiclient.LabEnv, error) {
+		return sharedClient.LabArchive(ctx, id)
+	}
 	apiLogsDialFn = func(ctx context.Context, suiteName, container string) (logStream, error) {
 		conn, err := sharedClient.DialLogs(ctx, suiteName, container)
 		if err != nil {

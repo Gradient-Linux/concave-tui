@@ -101,6 +101,7 @@ const (
 	ViewDoctor
 	ViewEnvironment
 	ViewFleet
+	ViewLabEnvs
 	ViewTeams
 	ViewSystem
 	ViewUsers
@@ -127,6 +128,7 @@ type RootModel struct {
 	doctor       DoctorModel
 	environment  EnvironmentModel
 	fleet        FleetModel
+	labEnvs      LabEnvsModel
 	teams        TeamsModel
 	system       SystemModel
 	users        UsersModel
@@ -182,6 +184,7 @@ func NewRootModel(version string, cfgs ...any) *RootModel {
 		doctor:      NewDoctorModel(),
 		environment: NewEnvironmentModel(),
 		fleet:       NewFleetModel(),
+		labEnvs:     NewLabEnvsModel(),
 		teams:       NewTeamsModel(),
 		system:      NewSystemModel(),
 		users:       NewUsersModel(),
@@ -267,6 +270,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.environment, cmd = m.environment.Update(msg)
 	case ViewFleet:
 		m.fleet, cmd = m.fleet.Update(msg)
+	case ViewLabEnvs:
+		m.labEnvs, cmd = m.labEnvs.Update(msg)
 	case ViewTeams:
 		m.teams, cmd = m.teams.Update(msg)
 	case ViewSystem:
@@ -306,6 +311,7 @@ func (m *RootModel) applySession(session tuiauth.Session) {
 	m.doctor.SetRole(session.Role)
 	m.environment.SetRole(session.Role)
 	m.fleet.SetRole(session.Role)
+	m.labEnvs.SetRole(session.Role)
 	m.teams.SetRole(session.Role)
 	m.system.SetRole(session.Role)
 	m.users.SetRole(session.Role)
@@ -434,6 +440,8 @@ func (m *RootModel) deactivateView(view View) {
 		m.environment.Deactivate()
 	case ViewFleet:
 		m.fleet.Deactivate()
+	case ViewLabEnvs:
+		m.labEnvs.Deactivate()
 	case ViewTeams:
 		m.teams.Deactivate()
 	case ViewSystem:
@@ -457,6 +465,8 @@ func (m *RootModel) activateView(view View) tea.Cmd {
 		return m.environment.Activate()
 	case ViewFleet:
 		return m.fleet.Activate()
+	case ViewLabEnvs:
+		return m.labEnvs.Activate()
 	case ViewTeams:
 		return m.teams.Activate()
 	case ViewSystem:
@@ -484,6 +494,7 @@ func (m *RootModel) applyLayout() {
 	m.doctor.SetSize(contentWidth, contentHeight)
 	m.environment.SetSize(contentWidth, contentHeight)
 	m.fleet.SetSize(contentWidth, contentHeight)
+	m.labEnvs.SetSize(contentWidth, contentHeight)
 	m.teams.SetSize(contentWidth, contentHeight)
 	m.system.SetSize(contentWidth, contentHeight)
 	m.users.SetSize(contentWidth, contentHeight)
@@ -572,6 +583,8 @@ func (m *RootModel) activeContent() string {
 		return m.environment.View()
 	case ViewFleet:
 		return m.fleet.View()
+	case ViewLabEnvs:
+		return m.labEnvs.View()
 	case ViewTeams:
 		return m.teams.View()
 	case ViewSystem:
@@ -679,6 +692,18 @@ func (m *RootModel) activeHelpActions() []string {
 			"r              refresh fleet",
 			"j / k          move peer selection",
 		}
+	case ViewLabEnvs:
+		actions := []string{
+			"r              refresh envs",
+			"j / k          select env",
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionStart) {
+			actions = append(actions, "e              extend +1h")
+		}
+		if tuiauth.Can(m.session.Role, tuiauth.ActionStop) {
+			actions = append(actions, "a              archive now")
+		}
+		return actions
 	case ViewTeams:
 		return []string{
 			"r              refresh teams",
@@ -829,7 +854,7 @@ func sidebarStateFromConfig(cfg tuiconfig.Config) SidebarState {
 }
 
 func (m RootModel) visibleViews() []View {
-	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor, ViewEnvironment, ViewFleet}
+	views := []View{ViewWorkspace, ViewSuites, ViewLogs, ViewDoctor, ViewEnvironment, ViewFleet, ViewLabEnvs}
 	if m.session.Role >= tuiauth.RoleAdmin {
 		views = append(views, ViewTeams, ViewSystem, ViewUsers)
 	}
@@ -883,6 +908,8 @@ func sidebarIcon(view View) string {
 		return "EN"
 	case ViewFleet:
 		return "FL"
+	case ViewLabEnvs:
+		return "LE"
 	case ViewTeams:
 		return "TM"
 	case ViewSystem:
@@ -908,6 +935,8 @@ func sidebarLabel(view View) string {
 		return "Environment"
 	case ViewFleet:
 		return "Fleet"
+	case ViewLabEnvs:
+		return "Lab Envs"
 	case ViewTeams:
 		return "Teams"
 	case ViewSystem:

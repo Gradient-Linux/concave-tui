@@ -620,6 +620,97 @@ func (c *Client) do(req *http.Request, out any) error {
 	return nil
 }
 
+type LabEnv struct {
+	ID           string    `json:"id"`
+	Driver       string    `json:"driver"`
+	Owner        string    `json:"owner"`
+	Image        string    `json:"image"`
+	DisplayName  string    `json:"display_name,omitempty"`
+	Status       string    `json:"status"`
+	JupyterURL   string    `json:"jupyter_url,omitempty"`
+	Token        string    `json:"token,omitempty"`
+	GPUs         int       `json:"gpus"`
+	CPURequest   string    `json:"cpu_request,omitempty"`
+	MemRequest   string    `json:"mem_request,omitempty"`
+	HotTierPath  string    `json:"hot_tier_path"`
+	ColdTierPath string    `json:"cold_tier_path"`
+	ArchiveRef   string    `json:"archive_ref,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	LastError    string    `json:"last_error,omitempty"`
+}
+
+type LabStorage struct {
+	HotTier  string `json:"hot_tier"`
+	ColdTier string `json:"cold_tier"`
+}
+
+type LabEnvsResponse struct {
+	Envs    []LabEnv   `json:"envs"`
+	Storage LabStorage `json:"storage"`
+	Drivers []string   `json:"drivers"`
+	Active  string     `json:"active"`
+}
+
+type LabLaunchRequest struct {
+	Image       string `json:"image"`
+	DisplayName string `json:"display_name,omitempty"`
+	Driver      string `json:"driver,omitempty"`
+	GPUs        int    `json:"gpus,omitempty"`
+	CPURequest  string `json:"cpu_request,omitempty"`
+	MemRequest  string `json:"mem_request,omitempty"`
+	TTLSeconds  int    `json:"ttl_seconds"`
+}
+
+func (c *Client) LabEnvs(ctx context.Context) (LabEnvsResponse, error) {
+	var response LabEnvsResponse
+	req, err := c.newJSONRequest(ctx, http.MethodGet, "/api/v1/lab/envs", nil)
+	if err != nil {
+		return LabEnvsResponse{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return LabEnvsResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) LabLaunch(ctx context.Context, payload LabLaunchRequest) (LabEnv, error) {
+	var response LabEnv
+	req, err := c.newJSONRequest(ctx, http.MethodPost, "/api/v1/lab/envs", payload)
+	if err != nil {
+		return LabEnv{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return LabEnv{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) LabExtend(ctx context.Context, id string, extendSeconds int) (LabEnv, error) {
+	var response LabEnv
+	body := map[string]int{"extend_seconds": extendSeconds}
+	req, err := c.newJSONRequest(ctx, http.MethodPost, "/api/v1/lab/envs/"+url.PathEscape(id)+"/extend", body)
+	if err != nil {
+		return LabEnv{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return LabEnv{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) LabArchive(ctx context.Context, id string) (LabEnv, error) {
+	var response LabEnv
+	req, err := c.newJSONRequest(ctx, http.MethodPost, "/api/v1/lab/envs/"+url.PathEscape(id)+"/archive", nil)
+	if err != nil {
+		return LabEnv{}, err
+	}
+	if err := c.do(req, &response); err != nil {
+		return LabEnv{}, err
+	}
+	return response, nil
+}
+
 func IsUnauthorized(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
